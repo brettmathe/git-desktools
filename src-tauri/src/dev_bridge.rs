@@ -9,8 +9,14 @@
 //! Commands that write to a repo or touch the network are refused unless the
 //! repo lives under `GDT_BRIDGE_WRITE_ROOT`, so a UI test can never push, fetch
 //! or commit in a real repository.
+//!
+//! Smart Environments are stored under `GDT_BRIDGE_CONFIG_DIR` (point it at a
+//! scratch folder); without it, saving or deleting an environment is refused so
+//! a test can't touch the real app config. Folder pickers answer with the path
+//! in `GDT_BRIDGE_PICK`.
 
 use crate::git::{self, NetLocks};
+use crate::smart::{self, SmartStore};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -20,6 +26,7 @@ struct Bridge {
     locks: NetLocks,
     settings: Mutex<Value>,
     write_root: Option<String>,
+    smart: Option<SmartStore>,
 }
 
 const MUTATING: &[&str] = &[
@@ -92,6 +99,25 @@ fn dispatch(b: &Bridge, cmd: &str, a: &Value) -> Result<Value, String> {
             *b.settings.lock().unwrap() = a.get("settings").cloned().unwrap_or(Value::Null);
             Ok(Value::Null)
         }
+        cmd if cmd.starts_with("sf_") => smart_dispatch(b, cmd, a),
+        // Native folder pickers can't open in a browser; answer with GDT_BRIDGE_PICK.
+        "plugin:dialog|open" | "plugin:dialog%7Copen" => Ok(json!(std::env::var("GDT_BRIDGE_PICK").ok())),
+        other => Err(format!("dev bridge: unsupported command {other}")),
+    }
+}
+
+fn smart_dispatch(b: &Bridge, cmd: &str, a: &Value) -> Result<Value, String> {
+    let Some(store) = b.smart.as_ref() else {
+        return Err(format!("dev bridge: refusing {cmd} without GDT_BRIDGE_CONFIG_DIR"));
+    };
+    let env_id = opt(a, "envId");
+    match cmd {
+        "sf_list_envs" => to(Ok(smart::bridge::list(store))),
+        "sf_save_env" => to(store.save(serde_json::from_value(a.get("env").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?)),
+        "sf_delete_env" => to(store.delete(&s(a, "id"))),
+        "sf_validate_repo" => to(smart::bridge::validate(store, &s(a, "path"), env_id.as_deref())),
+        "sf_scan_folder" => to(Ok(smart::bridge::scan_folder(store, &s(a, "path"), env_id.as_deref()))),
+        "sf_status" => to(smart::bridge::status(store, &s(a, "envId"))),
         other => Err(format!("dev bridge: unsupported command {other}")),
     }
 }
@@ -150,7 +176,8 @@ fn dev_bridge() {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or(Value::Null);
     let write_root = std::env::var("GDT_BRIDGE_WRITE_ROOT").ok();
-    let bridge = Arc::new(Bridge { locks: NetLocks::default(), settings: Mutex::new(settings), write_root });
+    let smart = std::env::var("GDT_BRIDGE_CONFIG_DIR").ok().map(|d| SmartStore::new(d.into()));
+    let bridge = Arc::new(Bridge { locks: NetLocks::default(), settings: Mutex::new(settings), write_root, smart });
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind bridge port");
     println!("dev bridge listening on http://127.0.0.1:{port}");
     for stream in listener.incoming().flatten() {

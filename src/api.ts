@@ -4,10 +4,14 @@ import type {
   CommitDetail,
   FileContent,
   FileDiff,
+  RepoCheck,
   RepoData,
   RepoInfo,
   RepoSummary,
+  ScanHit,
   Settings,
+  SmartEnv,
+  SmartRepoStatus,
   WipStatus,
 } from "./types";
 
@@ -46,6 +50,13 @@ export const api = {
   ptyKill: (id: number) => invoke<void>("pty_kill", { id }),
   loadSettings: () => invoke<Partial<Settings> | null>("load_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
+  sfListEnvs: () => invoke<{ envs: SmartEnv[]; warnings: string[] }>("sf_list_envs"),
+  sfSaveEnv: (env: SmartEnv) => invoke<SmartEnv>("sf_save_env", { env }),
+  sfDeleteEnv: (id: string) => invoke<void>("sf_delete_env", { id }),
+  sfValidateRepo: (path: string, envId: string | null) =>
+    invoke<RepoCheck>("sf_validate_repo", { path, envId }),
+  sfScanFolder: (path: string, envId: string | null) => invoke<ScanHit[]>("sf_scan_folder", { path, envId }),
+  sfStatus: (envId: string) => invoke<SmartRepoStatus[]>("sf_status", { envId }),
 };
 
 export function errorText(err: unknown): string {

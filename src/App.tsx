@@ -2,12 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorText } from "./api";
 import { Launchpad } from "./components/Launchpad";
 import { RepoView } from "./components/RepoView";
+import { Resizer, clamp } from "./components/Resizer";
 import { SettingsPopover } from "./components/SettingsPopover";
+import { SmartFeaturesPanel } from "./components/SmartFeaturesPanel";
 import { TabBar, type Tab } from "./components/TabBar";
 import { showToast, Toaster } from "./toast";
-import type { RepoInfo, Settings } from "./types";
+import type { RepoInfo, Settings, SmartFeaturesUi } from "./types";
 
 const DEFAULT_SETTINGS: Settings = { recent: [], openTabs: [], activeTab: null, autoFetchSeconds: 60 };
+const DEFAULT_SF_UI: SmartFeaturesUi = { panelOpen: false, width: 300, collapsed: [], changedOnly: false };
 const MAX_RECENT = 30;
 
 let tabCounter = 0;
@@ -22,6 +25,7 @@ function normalize(raw: Partial<Settings> | null): Settings {
     recent: Array.isArray(raw?.recent) ? raw.recent : [],
     openTabs: Array.isArray(raw?.openTabs) ? raw.openTabs : [],
     autoFetchSeconds: typeof raw?.autoFetchSeconds === "number" ? raw.autoFetchSeconds : 60,
+    smartFeatures: { ...DEFAULT_SF_UI, ...(raw?.smartFeatures ?? {}) },
   };
 }
 
@@ -134,6 +138,9 @@ export default function App() {
   if (!settings) return <div className="app booting" />;
 
   const repoTabs = tabs.filter((t): t is Extract<Tab, { kind: "repo" }> => t.kind === "repo");
+  const sfUi = settings.smartFeatures ?? DEFAULT_SF_UI;
+  const setSfUi = (patch: Partial<SmartFeaturesUi>) =>
+    updateSettings((s) => ({ ...s, smartFeatures: { ...(s.smartFeatures ?? DEFAULT_SF_UI), ...patch } }));
 
   return (
     <div className="app">
@@ -144,6 +151,8 @@ export default function App() {
         onClose={closeTab}
         onNew={newTab}
         onSettings={() => setShowSettings((s) => !s)}
+        panelOpen={sfUi.panelOpen}
+        onTogglePanel={() => setSfUi({ panelOpen: !sfUi.panelOpen })}
       />
       {showSettings && (
         <SettingsPopover
@@ -152,33 +161,48 @@ export default function App() {
           onClose={() => setShowSettings(false)}
         />
       )}
-      <div className="tab-content">
-        {tabs.map((t) => (
-          <div key={t.id} className="tab-pane" style={{ display: t.id === activeId ? undefined : "none" }}>
-            {t.kind === "launchpad" ? (
-              <Launchpad
-                recent={settings.recent}
-                openPaths={repoTabs.map((r) => r.path)}
-                cloneDir={cloneDir}
-                onOpen={(p) => void openRepo(p)}
-                onRemoveRecent={(p) => updateSettings((s) => ({ ...s, recent: s.recent.filter((r) => r.path !== p) }))}
-                onCloned={(info, dir) => {
-                  setCloneDir(dir);
-                  updateSettings((s) => ({ ...s, cloneDir: dir }));
-                  showToast(`Cloned ${info.name}`, "success");
-                  showRepo(info);
-                }}
-              />
-            ) : (
-              <RepoView
-                path={t.path}
-                active={t.id === activeId}
-                autoFetchSeconds={settings.autoFetchSeconds}
-                fetchDelayMs={2000 + repoTabs.findIndex((r) => r.id === t.id) * 4000}
-              />
-            )}
-          </div>
-        ))}
+      <div className="workspace">
+        {sfUi.panelOpen && (
+          <>
+            <SmartFeaturesPanel
+              ui={sfUi}
+              onUi={setSfUi}
+              openPaths={repoTabs.map((r) => r.path)}
+              onOpenRepo={(p) => void openRepo(p)}
+            />
+            <Resizer className="sf-resizer" onDrag={(d) => setSfUi({ width: clamp(sfUi.width + d, 220, 560) })} />
+          </>
+        )}
+        <div className="tab-content">
+          {tabs.map((t) => (
+            <div key={t.id} className="tab-pane" style={{ display: t.id === activeId ? undefined : "none" }}>
+              {t.kind === "launchpad" ? (
+                <Launchpad
+                  recent={settings.recent}
+                  openPaths={repoTabs.map((r) => r.path)}
+                  cloneDir={cloneDir}
+                  onOpen={(p) => void openRepo(p)}
+                  onRemoveRecent={(p) =>
+                    updateSettings((s) => ({ ...s, recent: s.recent.filter((r) => r.path !== p) }))
+                  }
+                  onCloned={(info, dir) => {
+                    setCloneDir(dir);
+                    updateSettings((s) => ({ ...s, cloneDir: dir }));
+                    showToast(`Cloned ${info.name}`, "success");
+                    showRepo(info);
+                  }}
+                />
+              ) : (
+                <RepoView
+                  path={t.path}
+                  active={t.id === activeId}
+                  autoFetchSeconds={settings.autoFetchSeconds}
+                  fetchDelayMs={2000 + repoTabs.findIndex((r) => r.id === t.id) * 4000}
+                />
+              )}
+            </div>
+          ))}
+        </div>
       </div>
       <Toaster />
     </div>

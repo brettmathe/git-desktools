@@ -2,6 +2,7 @@ mod git;
 mod graph;
 mod pty;
 mod settings;
+mod smart;
 
 #[cfg(test)]
 mod dev_bridge;
@@ -59,6 +60,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(pty::PtyState::default())
         .manage(git::NetLocks::default())
+        .setup(|app| {
+            use tauri::Manager;
+            let dir = app.path().app_config_dir()?.join("smart-features");
+            app.manage(smart::SmartStore::new(dir));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             git::open_repo,
             git::init_repo,
@@ -85,6 +92,12 @@ pub fn run() {
             pty::pty_kill,
             settings::load_settings,
             settings::save_settings,
+            smart::sf_list_envs,
+            smart::sf_save_env,
+            smart::sf_delete_env,
+            smart::sf_validate_repo,
+            smart::sf_scan_folder,
+            smart::sf_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running git-desktools");

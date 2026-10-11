@@ -29,11 +29,11 @@ const MAX_CONTENT_BYTES: usize = 2 * 1024 * 1024;
 const BACKGROUND_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
 const MANUAL_FETCH_TIMEOUT: Duration = Duration::from_secs(300);
 
-fn e<E: std::fmt::Display>(err: E) -> String {
+pub(crate) fn e<E: std::fmt::Display>(err: E) -> String {
     err.to_string()
 }
 
-async fn blocking<T, F>(f: F) -> CmdResult<T>
+pub(crate) async fn blocking<T, F>(f: F) -> CmdResult<T>
 where
     T: Send + 'static,
     F: FnOnce() -> CmdResult<T> + Send + 'static,
@@ -41,7 +41,7 @@ where
     tauri::async_runtime::spawn_blocking(f).await.map_err(e)?
 }
 
-fn open(path: &str) -> CmdResult<Repository> {
+pub(crate) fn open(path: &str) -> CmdResult<Repository> {
     Repository::open(path).map_err(e)
 }
 
@@ -49,7 +49,7 @@ fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-fn root_of(repo: &Repository) -> String {
+pub(crate) fn root_of(repo: &Repository) -> String {
     let p = repo.workdir().unwrap_or_else(|| repo.path());
     let s = p.to_string_lossy().to_string();
     let trimmed = s.trim_end_matches(['/', '\\']);
@@ -60,7 +60,7 @@ fn root_of(repo: &Repository) -> String {
     }
 }
 
-fn name_of(root: &str) -> String {
+pub(crate) fn name_of(root: &str) -> String {
     Path::new(root)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -296,12 +296,12 @@ fn owner_from_url(url: &str) -> Option<String> {
     (segs.len() >= 2).then(|| segs[segs.len() - 2].to_string())
 }
 
-fn head_branch(repo: &Repository) -> Option<String> {
+pub(crate) fn head_branch(repo: &Repository) -> Option<String> {
     let head = repo.head().ok()?;
     head.is_branch().then(|| head.shorthand().ok().map(str::to_string)).flatten()
 }
 
-fn unborn_branch(repo: &Repository) -> Option<String> {
+pub(crate) fn unborn_branch(repo: &Repository) -> Option<String> {
     // HEAD -> refs/heads/main even when main has no commits yet.
     let r = repo.find_reference("HEAD").ok()?;
     r.symbolic_target()

@@ -245,7 +245,7 @@ Make `app-icon.svg` (simple git-branch glyph on a rounded square) and run `pnpm 
 4. Screenshot the running app to compare against `docs/reference/` (use the `run` skill).
 5. Commit in logical chunks once it works (ask the user before the first commit).
 
-## Smart Features (approved, not started)
+## Smart Features (approved; Phase 1 built)
 
 Approved by the user on 2026-10-11 as an exception to "keep it simple". The full plan lives in the
 user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
@@ -264,6 +264,32 @@ user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
   `settings.json` keeps only panel UI state.
 - **Phases**: 1 environments + read-only status panel; 2 features + auto-branch; 3 switching + finish;
   4 polish (export/import, update from base).
+
+**Status (2026-10-11, branch `feat/smart-features`):** Phase 1 is built and verified.
+- Backend `src-tauri/src/smart.rs`: `SmartStore` (one `env-<id>.json` per environment plus an
+  `environments.json` order file, atomic writes with a `.bak`, unreadable file → falls back to the
+  backup with a warning), commands `sf_list_envs`, `sf_save_env`, `sf_delete_env`, `sf_validate_repo`,
+  `sf_scan_folder`, `sf_status`. Repos are stored by real path, so a symlinked path is the same repo.
+  One environment per repo is enforced on save. Edits never overwrite feature state (features, active
+  feature, journal), and removing a repo that a feature uses is refused.
+- Base branch: per-repo override → shared base (if the repo has it) → `origin/HEAD` →
+  develop/main/master.
+- Dots (computed in Rust): red = staged/unstaged/untracked/conflicted; yellow = ahead of upstream,
+  or ahead of base with no upstream; green otherwise. Amber warning for merge/rebase in progress,
+  detached HEAD, no base branch, or not on the expected branch.
+- UI: `SmartFeaturesPanel` (left, resizable, toggled by the layers icon in the tab bar; clean repos
+  collapse into "N clean"; Changed only filter; Fetch all; Edit/Delete) and `EnvironmentDialog`
+  (Add repo…, Add from folder… with a checklist, Add open tabs, labels, base overrides, shared base).
+  Panel UI state lives in `settings.json` as `smartFeatures`.
+- Deviations from the plan: which environment holds a repo is derived from the env files rather than
+  stored in a `repoIndex`, so the two can't drift; there's no cross-process lock file yet (one app
+  instance is assumed); environment repos without an open tab are refreshed by the panel (focus +
+  every 30 s) and fetched by **Fetch all**, not by background auto-fetch yet.
+- Verified: 6 Rust tests (`cargo test smart`) and a headless-Chrome run through the dev bridge
+  against throwaway repos (create via Add from folder + Add open tabs, dots for each state,
+  one-environment-per-repo note, open repo tab from the panel, delete). The dev bridge stores
+  environments under `GDT_BRIDGE_CONFIG_DIR` and answers folder pickers with `GDT_BRIDGE_PICK`.
+- Next: Phase 2 (start feature, watcher-driven auto-branch, commit guard, Push all).
 
 ## Phase 2 (not in v1 unless asked)
 Discard changes, partial (hunk/line) staging, checkout branch (double-click), pull with rebase/merge, stash UI (Smart Features stashes are separate, see above), commit search/filter, blame/history, split diff, syntax highlighting, watching `.git` with a filesystem watcher instead of focus polling, OS notifications when auto-fetch finds new commits.
