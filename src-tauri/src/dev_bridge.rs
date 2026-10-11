@@ -1,0 +1,160 @@
+//! Test-only HTTP bridge so the UI can be driven in a plain browser against the
+//! real git backend (used for automated UI checks; never compiled into the app).
+//!
+//!   GDT_BRIDGE_SETTINGS='{"openTabs":["/path/to/repo"]}' \
+//!     cargo test dev_bridge -- --ignored --nocapture
+//!
+//! then open the Vite dev server (http://localhost:1420) in a browser.
+//!
+//! Commands that write to a repo or touch the network are refused unless the
+//! repo lives under `GDT_BRIDGE_WRITE_ROOT`, so a UI test can never push, fetch
+//! or commit in a real repository.
+
+use crate::git::{self, NetLocks};
+use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
+
+struct Bridge {
+    locks: NetLocks,
+    settings: Mutex<Value>,
+    write_root: Option<String>,
+}
+
+const MUTATING: &[&str] = &[
+    "init_repo",
+    "stage_files",
+    "unstage_files",
+    "commit",
+    "clone_repo",
+    "fetch_repo",
+    "pull_repo",
+    "push_repo",
+];
+
+fn s(a: &Value, k: &str) -> String {
+    a.get(k).and_then(Value::as_str).unwrap_or_default().to_string()
+}
+fn opt(a: &Value, k: &str) -> Option<String> {
+    a.get(k).and_then(Value::as_str).map(str::to_string)
+}
+fn flag(a: &Value, k: &str) -> bool {
+    a.get(k).and_then(Value::as_bool).unwrap_or(false)
+}
+fn list(a: &Value, k: &str) -> Vec<String> {
+    a.get(k)
+        .and_then(Value::as_array)
+        .map(|v| v.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+fn to<T: serde::Serialize>(r: Result<T, String>) -> Result<Value, String> {
+    r.map(|v| serde_json::to_value(v).unwrap())
+}
+
+fn dispatch(b: &Bridge, cmd: &str, a: &Value) -> Result<Value, String> {
+    use tauri::async_runtime::block_on;
+    if MUTATING.contains(&cmd) {
+        let target = if cmd == "clone_repo" { s(a, "parentDir") } else { s(a, "path") };
+        let allowed = b.write_root.as_deref().is_some_and(|root| !root.is_empty() && target.starts_with(root));
+        if !allowed {
+            return Err(format!("dev bridge: refusing {cmd} outside GDT_BRIDGE_WRITE_ROOT ({target})"));
+        }
+    }
+    match cmd {
+        "open_repo" => to(block_on(git::open_repo(s(a, "path")))),
+        "init_repo" => to(block_on(git::init_repo(s(a, "path")))),
+        "default_clone_dir" => Ok(json!(git::default_clone_dir())),
+        "repo_summary" => to(block_on(git::repo_summary(s(a, "path")))),
+        "repo_fingerprint" => to(block_on(git::repo_fingerprint(s(a, "path")))),
+        "load_repo" => to(block_on(git::load_repo(s(a, "path")))),
+        "commit_detail" => to(block_on(git::commit_detail(s(a, "path"), s(a, "oid")))),
+        "file_diff" => to(block_on(git::file_diff(s(a, "path"), s(a, "oid"), s(a, "file"), opt(a, "oldFile")))),
+        "wip_file_diff" => to(block_on(git::wip_file_diff(
+            s(a, "path"),
+            s(a, "file"),
+            opt(a, "oldFile"),
+            flag(a, "staged"),
+        ))),
+        "file_content" => to(block_on(git::file_content(s(a, "path"), opt(a, "oid"), s(a, "file")))),
+        "wip_status" => to(block_on(git::wip_status(s(a, "path")))),
+        "stage_files" => to(block_on(git::stage_files(s(a, "path"), list(a, "files")))),
+        "unstage_files" => to(block_on(git::unstage_files(s(a, "path"), list(a, "files")))),
+        "head_message" => to(block_on(git::head_message(s(a, "path")))),
+        "commit" => to(block_on(git::commit(s(a, "path"), s(a, "message"), flag(a, "amend")))),
+        "clone_repo" => to(block_on(git::clone_impl(s(a, "url"), s(a, "parentDir"), s(a, "name"), None))),
+        "fetch_repo" => to(block_on(git::fetch_impl(&b.locks, s(a, "path"), flag(a, "quiet")))),
+        "pull_repo" => to(block_on(git::pull_impl(&b.locks, s(a, "path"), None))),
+        "push_repo" => to(block_on(git::push_impl(&b.locks, s(a, "path"), opt(a, "remote"), opt(a, "branch"), None))),
+        "load_settings" => Ok(b.settings.lock().unwrap().clone()),
+        "save_settings" => {
+            *b.settings.lock().unwrap() = a.get("settings").cloned().unwrap_or(Value::Null);
+            Ok(Value::Null)
+        }
+        other => Err(format!("dev bridge: unsupported command {other}")),
+    }
+}
+
+fn respond(stream: &mut TcpStream, status: &str, body: &str) {
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Headers: content-type\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+}
+
+fn handle(b: &Bridge, mut stream: TcpStream) {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut first = String::new();
+    if reader.read_line(&mut first).is_err() {
+        return;
+    }
+    let mut len = 0usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+            break;
+        }
+        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+            len = v.trim().parse().unwrap_or(0);
+        }
+    }
+    let mut body = vec![0u8; len];
+    let _ = reader.read_exact(&mut body);
+
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let target = parts.next().unwrap_or("");
+    if method == "OPTIONS" {
+        return respond(&mut stream, "204 No Content", "");
+    }
+    let Some(cmd) = target.strip_prefix("/cmd/") else {
+        return respond(&mut stream, "404 Not Found", "\"not found\"");
+    };
+    let args: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    match dispatch(b, cmd, &args) {
+        Ok(v) => respond(&mut stream, "200 OK", &v.to_string()),
+        Err(e) => respond(&mut stream, "500 Internal Server Error", &json!(e).to_string()),
+    }
+}
+
+#[test]
+#[ignore]
+fn dev_bridge() {
+    let port: u16 = std::env::var("GDT_BRIDGE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(1421);
+    let settings = std::env::var("GDT_BRIDGE_SETTINGS")
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(Value::Null);
+    let write_root = std::env::var("GDT_BRIDGE_WRITE_ROOT").ok();
+    let bridge = Arc::new(Bridge { locks: NetLocks::default(), settings: Mutex::new(settings), write_root });
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind bridge port");
+    println!("dev bridge listening on http://127.0.0.1:{port}");
+    for stream in listener.incoming().flatten() {
+        let b = bridge.clone();
+        std::thread::spawn(move || handle(&b, stream));
+    }
+}
