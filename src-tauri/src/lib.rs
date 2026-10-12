@@ -89,6 +89,7 @@ pub fn run() {
             git::wip_status,
             git::stage_files,
             git::unstage_files,
+            git::discard_files,
             git::head_message,
             git::commit,
             git::clone_repo,

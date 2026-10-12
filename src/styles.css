@@ -2198,3 +2198,45 @@ button.plain {
   padding: 3px 0;
   color: var(--amber);
 }
+
+/* ---------- context menu ---------- */
+.context-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 200px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.context-menu button {
+  border: none;
+  background: none;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+}
+.context-menu button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.context-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.context-menu button.danger {
+  color: var(--red);
+}
+.discard-modal {
+  width: min(480px, calc(100vw - 32px));
+}
+.discard-modal p {
+  margin: 8px 0 4px;
+}
+.discard-path {
+  word-break: break-all;
+}

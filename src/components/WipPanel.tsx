@@ -3,7 +3,7 @@ import { api, errorText } from "../api";
 import type { CommitGuard, FileChange, FileViewMode, OpenFile, WipStatus } from "../types";
 import { plural } from "../util";
 import { showToast } from "../toast";
-import { FileList, ViewModeToggle } from "./FileList";
+import { FileList, ViewModeToggle, type MenuItem } from "./FileList";
 import { ChevronIcon } from "./icons";
 
 export interface CommitDraft {
@@ -37,6 +37,8 @@ export function WipPanel(p: Props) {
   // Smart Features: this commit would land on base while a feature is active.
   const [guard, setGuard] = useState<CommitGuard | null>(null);
   const [open, setOpen] = useState({ unstaged: true, staged: true });
+  // Files waiting for the user to confirm Discard (it can't be undone).
+  const [discarding, setDiscarding] = useState<{ files: FileChange[]; folder?: string } | null>(null);
   const total = new Set([...wip.unstaged, ...wip.staged].map((f) => f.path)).size;
 
   const run = async (fn: () => Promise<void>) => {
@@ -52,6 +54,51 @@ export function WipPanel(p: Props) {
   };
   const stage = (files: string[]) => run(() => api.stageFiles(p.path, files));
   const unstage = (files: string[]) => run(() => api.unstageFiles(p.path, files));
+  const discard = (files: FileChange[]) =>
+    run(async () => {
+      await api.discardFiles(p.path, files.map((f) => f.path));
+      const what = files.length === 1 ? `changes to ${files[0].path}` : plural(files.length, "change");
+      showToast(`Discarded ${what}`, "success");
+    });
+
+  const copyPath = (path: string) =>
+    void navigator.clipboard.writeText(path).then(() => showToast("Copied file path", "success"));
+
+  const unstagedMenu = (t: { file: FileChange } | { folder: string; files: FileChange[] }): MenuItem[] => {
+    if ("file" in t) {
+      const conflicted = t.file.status === "U";
+      return [
+        { label: "Stage file", onClick: () => void stage([t.file.path]), disabled: busy },
+        {
+          label: "Discard changes…",
+          onClick: () => setDiscarding({ files: [t.file] }),
+          danger: true,
+          disabled: busy || conflicted,
+        },
+        { label: "Copy file path", onClick: () => copyPath(t.file.path) },
+      ];
+    }
+    const files = t.files.filter((f) => f.status !== "U");
+    return [
+      { label: "Stage folder", onClick: () => void stage(t.files.map((f) => f.path)), disabled: busy },
+      {
+        label: "Discard changes in folder…",
+        onClick: () => setDiscarding({ files, folder: t.folder }),
+        danger: true,
+        disabled: busy || files.length === 0,
+      },
+    ];
+  };
+
+  const stagedMenu = (t: { file: FileChange } | { folder: string; files: FileChange[] }): MenuItem[] => {
+    const paths = ("file" in t ? [t.file] : t.files).flatMap((f) => (f.oldPath ? [f.path, f.oldPath] : [f.path]));
+    return "file" in t
+      ? [
+          { label: "Unstage file", onClick: () => void unstage(paths), disabled: busy },
+          { label: "Copy file path", onClick: () => copyPath(t.file.path) },
+        ]
+      : [{ label: "Unstage folder", onClick: () => void unstage(paths), disabled: busy }];
+  };
 
   const toggleAmend = async (amend: boolean) => {
     if (amend) {
@@ -155,6 +202,7 @@ export function WipPanel(p: Props) {
                 mode={p.viewMode}
                 selectedPath={openPath(false)}
                 onOpen={(f) => p.onOpenFile(f, false)}
+                contextMenu={unstagedMenu}
                 action={(f) => (
                   <button
                     className="mini-btn green"
@@ -189,6 +237,7 @@ export function WipPanel(p: Props) {
                 mode={p.viewMode}
                 selectedPath={openPath(true)}
                 onOpen={(f) => p.onOpenFile(f, true)}
+                contextMenu={stagedMenu}
                 action={(f) => (
                   <button
                     className="mini-btn red"
@@ -250,6 +299,50 @@ export function WipPanel(p: Props) {
           {label}
         </button>
       </div>
+      {discarding && (
+        <div className="modal-backdrop" onMouseDown={() => setDiscarding(null)}>
+          <div className="modal discard-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-title">
+              {discarding.folder
+                ? `Discard ${plural(discarding.files.length, "change")} in ${discarding.folder}?`
+                : `Discard changes to ${discarding.files[0].path.split("/").pop()}?`}
+            </div>
+            {!discarding.folder && <div className="dim small mono discard-path">{discarding.files[0].path}</div>}
+            <p>
+              {(() => {
+                const untracked = discarding.files.filter((f) => f.status === "A").length;
+                const tracked = discarding.files.length - untracked;
+                if (!discarding.folder)
+                  return untracked
+                    ? "This file is new (untracked), so it will be deleted."
+                    : "Its unstaged changes will be lost. Anything already staged is kept.";
+                return [
+                  tracked && `Unstaged changes to ${plural(tracked, "file")} will be lost; anything already staged is kept.`,
+                  untracked && `${plural(untracked, "new (untracked) file")} will be deleted.`,
+                ]
+                  .filter(Boolean)
+                  .join(" ");
+              })()}{" "}
+              This can't be undone.
+            </p>
+            <div className="popover-actions">
+              <button className="btn" autoFocus onClick={() => setDiscarding(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn danger"
+                onClick={() => {
+                  const files = discarding.files;
+                  setDiscarding(null);
+                  void discard(files);
+                }}
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
