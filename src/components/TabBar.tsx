@@ -1,5 +1,5 @@
 import { isMac } from "../util";
-import { BranchIcon, GearIcon, PlusIcon, RocketIcon, XIcon } from "./icons";
+import { BranchIcon, GearIcon, LayersIcon, PlusIcon, RocketIcon, XIcon } from "./icons";
 
 export type Tab = { id: string; kind: "launchpad" } | { id: string; kind: "repo"; path: string; name: string };
 
@@ -10,11 +10,20 @@ interface Props {
   onClose: (id: string) => void;
   onNew: () => void;
   onSettings: () => void;
+  panelOpen: boolean;
+  onTogglePanel: () => void;
 }
 
-export function TabBar({ tabs, activeId, onActivate, onClose, onNew, onSettings }: Props) {
+export function TabBar({ tabs, activeId, onActivate, onClose, onNew, onSettings, panelOpen, onTogglePanel }: Props) {
   return (
     <div className={`tab-bar${isMac ? " mac" : ""}`} data-tauri-drag-region>
+      <button
+        className={`icon-btn tab-panel-toggle${panelOpen ? " on" : ""}`}
+        onClick={onTogglePanel}
+        title={panelOpen ? "Hide Smart Features" : "Show Smart Features"}
+      >
+        <LayersIcon size={16} />
+      </button>
       {tabs.map((t) => (
         <div
           key={t.id}

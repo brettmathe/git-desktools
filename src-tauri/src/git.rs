@@ -29,11 +29,11 @@ const MAX_CONTENT_BYTES: usize = 2 * 1024 * 1024;
 const BACKGROUND_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
 const MANUAL_FETCH_TIMEOUT: Duration = Duration::from_secs(300);
 
-fn e<E: std::fmt::Display>(err: E) -> String {
+pub(crate) fn e<E: std::fmt::Display>(err: E) -> String {
     err.to_string()
 }
 
-async fn blocking<T, F>(f: F) -> CmdResult<T>
+pub(crate) async fn blocking<T, F>(f: F) -> CmdResult<T>
 where
     T: Send + 'static,
     F: FnOnce() -> CmdResult<T> + Send + 'static,
@@ -41,7 +41,7 @@ where
     tauri::async_runtime::spawn_blocking(f).await.map_err(e)?
 }
 
-fn open(path: &str) -> CmdResult<Repository> {
+pub(crate) fn open(path: &str) -> CmdResult<Repository> {
     Repository::open(path).map_err(e)
 }
 
@@ -49,7 +49,7 @@ fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-fn root_of(repo: &Repository) -> String {
+pub(crate) fn root_of(repo: &Repository) -> String {
     let p = repo.workdir().unwrap_or_else(|| repo.path());
     let s = p.to_string_lossy().to_string();
     let trimmed = s.trim_end_matches(['/', '\\']);
@@ -60,7 +60,7 @@ fn root_of(repo: &Repository) -> String {
     }
 }
 
-fn name_of(root: &str) -> String {
+pub(crate) fn name_of(root: &str) -> String {
     Path::new(root)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -109,7 +109,7 @@ pub struct GitRun {
     pub progress: Option<Progress>,
 }
 
-fn git_command(cwd: &Path) -> Command {
+pub(crate) fn git_command(cwd: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -227,7 +227,7 @@ pub struct NetGuard<'a> {
 }
 
 impl NetLocks {
-    fn try_lock(&self, key: &str) -> Option<NetGuard<'_>> {
+    pub(crate) fn try_lock(&self, key: &str) -> Option<NetGuard<'_>> {
         let mut set = self.0.lock().unwrap();
         if set.insert(key.to_string()) {
             Some(NetGuard { locks: self, key: key.to_string() })
@@ -243,7 +243,7 @@ impl Drop for NetGuard<'_> {
     }
 }
 
-const BUSY: &str = "Another fetch, pull or push is already running for this repository.";
+pub(crate) const BUSY: &str = "Another fetch, pull or push is already running for this repository.";
 
 // ---------------------------------------------------------------------------
 // Repository discovery
@@ -296,12 +296,12 @@ fn owner_from_url(url: &str) -> Option<String> {
     (segs.len() >= 2).then(|| segs[segs.len() - 2].to_string())
 }
 
-fn head_branch(repo: &Repository) -> Option<String> {
+pub(crate) fn head_branch(repo: &Repository) -> Option<String> {
     let head = repo.head().ok()?;
     head.is_branch().then(|| head.shorthand().ok().map(str::to_string)).flatten()
 }
 
-fn unborn_branch(repo: &Repository) -> Option<String> {
+pub(crate) fn unborn_branch(repo: &Repository) -> Option<String> {
     // HEAD -> refs/heads/main even when main has no commits yet.
     let r = repo.find_reference("HEAD").ok()?;
     r.symbolic_target()
@@ -573,13 +573,13 @@ fn label_rank(l: &RefLabel) -> u8 {
     }
 }
 
-fn is_dirty(repo: &Repository) -> bool {
+pub(crate) fn is_dirty(repo: &Repository) -> bool {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true).recurse_untracked_dirs(false).exclude_submodules(true);
     repo.statuses(Some(&mut opts)).map(|s| !s.is_empty()).unwrap_or(false)
 }
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
@@ -1132,8 +1132,30 @@ pub async fn head_message(path: String) -> CmdResult<String> {
 }
 
 #[tauri::command]
-pub async fn commit(path: String, message: String, amend: bool) -> CmdResult<String> {
+pub async fn commit(
+    store: State<'_, crate::smart::SmartStore>,
+    path: String,
+    message: String,
+    amend: bool,
+) -> CmdResult<String> {
+    commit_impl(Some(store.inner().clone()), path, message, amend).await
+}
+
+/// `store`: refuse to commit on base while the repo's Smart Environment has an
+/// active feature (the frontend offers to move the changes first).
+pub async fn commit_impl(
+    store: Option<crate::smart::SmartStore>,
+    path: String,
+    message: String,
+    amend: bool,
+) -> CmdResult<String> {
     blocking(move || {
+        if let Some(msg) = store.as_ref().and_then(|s| crate::smart_features::switch_running(s, &path)) {
+            return Err(msg);
+        }
+        if let Some(guard) = store.as_ref().and_then(|s| crate::smart_features::commit_guard(s, &path)) {
+            return Err(crate::smart_features::guard_message(&guard));
+        }
         let mut a = args(["commit", "-F", "-"]);
         if amend {
             a.push("--amend".into());

@@ -170,6 +170,17 @@ export const WarningIcon = (p: P) => (
     <path d="M12 3 2 20h20zM12 10v4M12 17h.01" />
   </Svg>
 );
+export const LayersIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="m12 3 9 5-9 5-9-5z" />
+    <path d="m3 13 9 5 9-5" />
+  </Svg>
+);
+export const MoreIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth={3} />
+  </Svg>
+);
 export const ClaudeIcon = ({ size = 14, ...rest }: P) => (
   <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden {...rest}>
     <g stroke="#d97757" strokeWidth="2.6" strokeLinecap="round">

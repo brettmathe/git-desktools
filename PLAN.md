@@ -245,7 +245,7 @@ Make `app-icon.svg` (simple git-branch glyph on a rounded square) and run `pnpm 
 4. Screenshot the running app to compare against `docs/reference/` (use the `run` skill).
 5. Commit in logical chunks once it works (ask the user before the first commit).
 
-## Smart Features (approved, not started)
+## Smart Features (approved; Phases 1–3 built)
 
 Approved by the user on 2026-10-11 as an exception to "keep it simple". The full plan lives in the
 user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
@@ -264,6 +264,129 @@ user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
   `settings.json` keeps only panel UI state.
 - **Phases**: 1 environments + read-only status panel; 2 features + auto-branch; 3 switching + finish;
   4 polish (export/import, update from base).
+
+**Status (2026-10-11, branch `feat/smart-features`):** Phase 1 is built and verified.
+- Backend `src-tauri/src/smart.rs`: `SmartStore` (one `env-<id>.json` per environment plus an
+  `environments.json` order file, atomic writes with a `.bak`, unreadable file → falls back to the
+  backup with a warning), commands `sf_list_envs`, `sf_save_env`, `sf_delete_env`, `sf_validate_repo`,
+  `sf_scan_folder`, `sf_status`. Repos are stored by real path, so a symlinked path is the same repo.
+  One environment per repo is enforced on save. Edits never overwrite feature state (features, active
+  feature, journal), and removing a repo that a feature uses is refused.
+- Base branch: per-repo override → shared base (if the repo has it) → `origin/HEAD` →
+  develop/main/master.
+- Dots (computed in Rust): red = staged/unstaged/untracked/conflicted; yellow = ahead of upstream,
+  or ahead of base with no upstream; green otherwise. Amber warning for merge/rebase in progress,
+  detached HEAD, no base branch, or not on the expected branch.
+- UI: `SmartFeaturesPanel` (left, resizable, toggled by the layers icon in the tab bar; clean repos
+  collapse into "N clean"; Changed only filter; Fetch all; Edit/Delete) and `EnvironmentDialog`
+  (Add repo…, Add from folder… with a checklist, Add open tabs, labels, base overrides, shared base).
+  Panel UI state lives in `settings.json` as `smartFeatures`.
+- Deviations from the plan: which environment holds a repo is derived from the env files rather than
+  stored in a `repoIndex`, so the two can't drift; the cross-process lock is an `flock` on
+  `smart-features/.lock` (added 2026-10-11 with the skills), taken for every write; environment repos without an open tab are refreshed by the panel (focus +
+  every 30 s) and fetched by **Fetch all**, not by background auto-fetch yet.
+- Verified: 6 Rust tests (`cargo test smart`) and a headless-Chrome run through the dev bridge
+  against throwaway repos (create via Add from folder + Add open tabs, dots for each state,
+  one-environment-per-repo note, open repo tab from the panel, delete). The dev bridge stores
+  environments under `GDT_BRIDGE_CONFIG_DIR` and answers folder pickers with `GDT_BRIDGE_PICK`.
+
+**Status (2026-10-11): Phase 2 is built and verified.**
+- `src-tauri/src/smart_features.rs`: `sf_check_branch` (git's `check-ref-format`, not a base or an
+  existing feature's branch, `a` vs `a/b` ref conflicts, where it exists locally/on origin, which
+  repos are dirty on base), `sf_start_feature` (creates no branches; `adopt` takes over an existing
+  branch and checks it out where it exists; repos already dirty on base move right away),
+  `sf_back_to_base`, `sf_move_to_feature`, `sf_commit_guard`, `sf_checkout_remote`,
+  `sf_rename_feature`, `sf_push_all` (`git push -u origin <b>:<b>` where there are unpushed
+  commits, 4 at a time, never forced; works for inactive features).
+- Auto-branch: when a repo is dirty **on its base** and its environment has an active feature,
+  `git switch --no-track -c <branch>` (or `git switch <branch>` if it already exists locally). It never
+  bases the branch on `origin/<branch>`; that repo shows a warning instead. A repo found on the
+  feature branch by hand is adopted into the feature. Feature operations share one lock
+  (`SmartStore::op_lock`).
+- `src-tauri/src/smart_watch.rs`: one `notify` watcher (FSEvents on macOS) over every environment
+  repo, 300 ms debounce (flushes at least every 2 s), ignores events where every path is gitignored,
+  plus a sweep every 10 s. Emits `sf-repo-changed`, `sf-auto-branched`, `sf-auto-branch-failed` (once
+  per distinct error). Resynced when environments are saved or deleted, and on every sweep.
+- Commit guard: `git::commit` refuses to commit on base while the repo's environment has an active
+  feature; the commit box shows "Move to <branch> and commit".
+- UI: active-feature bar per environment (name, branch, repo count, unpushed, Push all), "has
+  origin/<branch>: Check out" rows for a teammate's branch, a Features list for inactive features, menu
+  items New feature… / Push all / Rename feature… / Back to base, and `NewFeatureDialog` (live
+  validation via `src/branchName.ts`, adopt, "Pull base branches first"). Repo tabs refresh right away
+  when Smart Features changes a branch (`gdt-repos-changed` window event).
+- Phase 2 limits (Phase 3 removes them): **Back to base** and starting another feature refuse while the
+  active feature's repos have uncommitted changes (no parking yet); a feature that never touched a
+  repo is dropped when it's deactivated; there's no Switch or Finish yet, so a repo that a feature
+  used can't be removed from its environment.
+- Verified: `cargo test` (22 pass; Smart Features tests cover start, auto-branch keeping staged/
+  unstaged/untracked changes, name checks, adopt, commit guard, back to base, Push all, remote
+  checkout, and a real watcher test that edits a file and sees the branch appear); `pnpm test` runs
+  `src/branchName.test.ts`, which compares the regex with the installed git; and headless-Chrome runs
+  through the dev bridge (validation messages, start, auto-branch on an external edit, Push all, Back
+  to base, teammate branch Check out, commit guard). The bridge runs the watcher too
+  (`GDT_BRIDGE_NO_WATCH=1` turns it off) and refuses feature commands unless every repo of the
+  environment is under `GDT_BRIDGE_WRITE_ROOT`.
+
+**Status (2026-10-11): Phase 3 is built and verified.**
+- `src-tauri/src/smart_switch.rs`: a switch to feature T (or to base) *converges* every repo from its
+  current state: **park** (a repo on feature F's branch runs `git stash push --include-untracked`, tagged
+  `[sf <F-id>]`, pinned with `git update-ref refs/smart-features/<F-id>/stash`), **base** (`git switch
+  <base>`), **switch** (`git switch <T-branch>` where T's branch exists), **restore** (`git stash apply
+  --index <pin>`, falling back to a plain apply when the index can't be restored; on success the pin and
+  its stash-list entry are dropped). Each step checks git first, so running it again is safe: Retry =
+  switch to the journal's `to` again, Roll back = switch to its `from`. A stash made just before a crash
+  is found by its tag and pinned.
+- Preflight (read-only after an auto-branch pass) refuses, listing problems, for: missing folder,
+  merge/rebase in progress, `index.lock`, unresolved conflicts, detached HEAD, no base, a repo on a
+  branch that's neither base nor a feature's, uncommitted changes on base in a repo the target uses, or
+  parked changes left from a conflicted restore. The journal (`env.journal`: from, to, steps with
+  status) is written before the first step and after each; it's cleared on success. While it exists,
+  commits, auto-branch and other switches in that environment are refused, and the panel shows a banner
+  with **Retry** / **Roll back**. Fetch/pull/push locks are held for every repo during a switch.
+- A conflicting restore keeps the pin, leaves the conflict markers, and finishes the rest of the switch;
+  the repo shows "parked changes conflicted" with **Mark resolved** (allowed once no conflicts remain).
+- **Back to base** and starting a feature while another is active now park instead of refusing. Features
+  with no repos are kept (Finish removes them).
+- **Finish** (`sf_finish_preview`, `sf_finish_feature`): per repo, local branch, pushed/unpushed,
+  merged into `origin/<base>`, parked changes. Unpushed-and-unmerged commits or parked changes block
+  unless that repo is ticked to discard. If the feature is active it goes back to base first; then pins
+  and stash entries are dropped and local branches deleted. Remote branches are never deleted.
+- UI: Features list rows have **Switch** and ⋯ (Push all, Rename…, Finish…) and show 📦 for parked
+  changes; `SwitchFeatureDialog` (preflight summary per repo, problems, live step ticks from
+  `sf-progress`); `FinishFeatureDialog`; the recovery banner.
+- Verified: `cargo test` (28 pass; switching tests cover A→B→A restoring staged, staged+unstaged and
+  untracked files exactly, pins surviving `stash clear` + `reflog expire` + `gc --prune=now`, an
+  interrupted switch rolled back and retried, the stash-before-crash case, a conflicting restore +
+  Mark resolved, preflight blocking, and Finish blocking then discarding without touching origin). A
+  headless-Chrome run through the dev bridge did: start a second feature (parks the first), switch
+  back with everything restored, a blocked preflight (`index.lock`), a switch failed mid-way by a
+  `reference-transaction` hook → banner → Retry, and Finish requiring ticks.
+- Not done (Phase 4): reconciling orphan pins (a pin whose feature is gone), **Locate…** for moved
+  repos, export/import, Update from base, Move commits to feature, Launchpad section, and a warning about
+  open terminals in affected repos.
+
+**Claude Code skill: `smart-environment` (2026-10-11).** The app ships a Claude Code plugin in
+`src-tauri/claude-plugin/` (bundled as resources; in dev it's read from the source folder). Terminals
+opened in the app load it: the Claude terminal starts `claude` with `--plugin-dir`, and in zsh a
+`$ZDOTDIR` wrapper (`pty.rs` `ZSH_FILES`) sources the user's own zsh files and then defines
+`claude()` to add `--plugin-dir`; it restores the user's `ZDOTDIR` at the end so nested shells are
+untouched. The skill asks for the name, which repos and an optional shared base, then runs
+`smart_env.py` (Python 3 stdlib), which scans a folder (any depth), applies the app's rules (unique
+name, one environment per repo, real paths, non-bare) and writes `env-<id>.json` + the index. It only
+creates environments; edits stay in the app. The watcher emits `sf-envs-changed` when the set of
+environments changes on disk, so the panel shows it within ~10 s.
+
+A second skill, `smart-environment-add-repo`, handles "add crux_common to RGT": `smart_env.py
+find-repo` (repos in environments by folder name or label, then a scan of given folders) and
+`add-repo --env E --repo P --move`. A repo can be in only one environment (one working folder, one
+checked-out branch), so adding moves it. The move is refused while the old environment has an
+unfinished switch or any feature there touched the repo (recorded in the feature, a pinned stash, or
+the feature's local branch exists); the fix is Finish in the app. It removes the repo from the old
+environment before adding it to the new one, so a crash leaves it in neither, never both. The repo
+keeps its id, label and base override. Both skills share `claude-plugin/scripts/smart_env.py` and
+take the same `flock` as the app.
+
+- Next: Phase 4 (polish) when asked, then a manual run with the real RGT repos.
 
 ## Phase 2 (not in v1 unless asked)
 Discard changes, partial (hunk/line) staging, checkout branch (double-click), pull with rebase/merge, stash UI (Smart Features stashes are separate, see above), commit search/filter, blame/history, split diff, syntax highlighting, watching `.git` with a filesystem watcher instead of focus polling, OS notifications when auto-fetch finds new commits.

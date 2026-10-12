@@ -136,3 +136,7 @@ export function normalizeCloneUrl(input: string): { url: string; name: string } 
     .pop() ?? "";
   return { url, name };
 }
+
+/** Window event: something outside a repo tab (Smart Features) changed branches. */
+export const REPOS_CHANGED = "gdt-repos-changed";
+export const notifyReposChanged = () => window.dispatchEvent(new Event(REPOS_CHANGED));

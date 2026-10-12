@@ -1,13 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AutoBranched,
+  BranchCheck,
   CommitDetail,
+  CommitGuard,
+  FinishRepo,
+  Preflight,
   FileContent,
   FileDiff,
+  RepoCheck,
   RepoData,
   RepoInfo,
+  PushOutcome,
   RepoSummary,
+  ScanHit,
   Settings,
+  SmartEnv,
+  SmartRepoStatus,
+  SwitchResult,
+  SwitchStep,
   WipStatus,
 } from "./types";
 
@@ -46,7 +58,59 @@ export const api = {
   ptyKill: (id: number) => invoke<void>("pty_kill", { id }),
   loadSettings: () => invoke<Partial<Settings> | null>("load_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
+  sfListEnvs: () => invoke<{ envs: SmartEnv[]; warnings: string[] }>("sf_list_envs"),
+  sfSaveEnv: (env: SmartEnv) => invoke<SmartEnv>("sf_save_env", { env }),
+  sfDeleteEnv: (id: string) => invoke<void>("sf_delete_env", { id }),
+  sfValidateRepo: (path: string, envId: string | null) =>
+    invoke<RepoCheck>("sf_validate_repo", { path, envId }),
+  sfScanFolder: (path: string, envId: string | null) => invoke<ScanHit[]>("sf_scan_folder", { path, envId }),
+  sfStatus: (envId: string) => invoke<SmartRepoStatus[]>("sf_status", { envId }),
+  sfCheckBranch: (envId: string, branch: string) => invoke<BranchCheck>("sf_check_branch", { envId, branch }),
+  sfStartFeature: (envId: string, name: string, branch: string, adopt: boolean) =>
+    invoke<{ env: SmartEnv; moved: AutoBranched[]; warnings: string[] }>("sf_start_feature", {
+      envId,
+      name,
+      branch,
+      adopt,
+    }),
+  sfBackToBase: (envId: string) => invoke<SwitchResult>("sf_back_to_base", { envId }),
+  sfPreflight: (envId: string, targetId: string | null) => invoke<Preflight>("sf_preflight", { envId, targetId }),
+  sfSwitchFeature: (envId: string, targetId: string | null) =>
+    invoke<SwitchResult>("sf_switch_feature", { envId, targetId }),
+  sfResumeSwitch: (envId: string, mode: "retry" | "rollback") =>
+    invoke<SwitchResult>("sf_resume_switch", { envId, mode }),
+  sfMarkResolved: (envId: string, featureId: string, repoId: string) =>
+    invoke<SmartEnv>("sf_mark_resolved", { envId, featureId, repoId }),
+  sfFinishPreview: (envId: string, featureId: string) =>
+    invoke<FinishRepo[]>("sf_finish_preview", { envId, featureId }),
+  sfFinishFeature: (envId: string, featureId: string, discard: string[]) =>
+    invoke<SwitchResult>("sf_finish_feature", { envId, featureId, discard }),
+  sfMoveToFeature: (envId: string, repoId: string) =>
+    invoke<AutoBranched | null>("sf_move_to_feature", { envId, repoId }),
+  sfCommitGuard: (path: string) => invoke<CommitGuard | null>("sf_commit_guard", { path }),
+  sfCheckoutRemote: (envId: string, repoId: string) => invoke<SmartEnv>("sf_checkout_remote", { envId, repoId }),
+  sfRenameFeature: (envId: string, featureId: string, name: string) =>
+    invoke<SmartEnv>("sf_rename_feature", { envId, featureId, name }),
+  sfPushAll: (envId: string, featureId: string) => invoke<PushOutcome[]>("sf_push_all", { envId, featureId }),
 };
+
+/** Backend Smart Features events (see smart_watch.rs). */
+export function onSmartEvents(handlers: {
+  repoChanged: (p: { envId: string; repoId: string }) => void;
+  autoBranched: (p: AutoBranched) => void;
+  autoBranchFailed: (p: { envId: string; repoId: string; error: string }) => void;
+  envsChanged: () => void;
+}): () => void {
+  const subs = [
+    listen<{ envId: string; repoId: string }>("sf-repo-changed", (e) => handlers.repoChanged(e.payload)),
+    listen<AutoBranched>("sf-auto-branched", (e) => handlers.autoBranched(e.payload)),
+    listen<{ envId: string; repoId: string; error: string }>("sf-auto-branch-failed", (e) =>
+      handlers.autoBranchFailed(e.payload),
+    ),
+    listen("sf-envs-changed", () => handlers.envsChanged()),
+  ];
+  return () => subs.forEach((s) => void s.then((un) => un()));
+}
 
 export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -108,4 +172,12 @@ export function attachPty(id: number, handler: PtyHandler): () => void {
   return () => {
     handlers.delete(id);
   };
+}
+
+/** Live steps of a running switch, Back to base or Finish. */
+export function onSwitchProgress(envId: string, cb: (step: SwitchStep) => void): () => void {
+  const sub = listen<{ envId: string; step: SwitchStep }>("sf-progress", (e) => {
+    if (e.payload.envId === envId) cb(e.payload.step);
+  });
+  return () => void sub.then((un) => un());
 }
