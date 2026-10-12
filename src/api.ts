@@ -99,6 +99,7 @@ export function onSmartEvents(handlers: {
   repoChanged: (p: { envId: string; repoId: string }) => void;
   autoBranched: (p: AutoBranched) => void;
   autoBranchFailed: (p: { envId: string; repoId: string; error: string }) => void;
+  envsChanged: () => void;
 }): () => void {
   const subs = [
     listen<{ envId: string; repoId: string }>("sf-repo-changed", (e) => handlers.repoChanged(e.payload)),
@@ -106,6 +107,7 @@ export function onSmartEvents(handlers: {
     listen<{ envId: string; repoId: string; error: string }>("sf-auto-branch-failed", (e) =>
       handlers.autoBranchFailed(e.payload),
     ),
+    listen("sf-envs-changed", () => handlers.envsChanged()),
   ];
   return () => subs.forEach((s) => void s.then((un) => un()));
 }

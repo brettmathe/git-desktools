@@ -7,6 +7,9 @@
 //!   sf-repo-changed        {envId, repoId}            refresh that repo's status
 //!   sf-auto-branched       AutoBranched               a repo moved onto the feature branch
 //!   sf-auto-branch-failed  {envId, repoId, error}     sent once per distinct error
+//!   sf-envs-changed        {}                         environments were added, removed or
+//!                                                     renamed outside the panel (e.g. by the
+//!                                                     smart-environment skill)
 
 use crate::smart::SmartStore;
 use crate::smart_features::{auto_branch, sweep};
@@ -81,6 +84,8 @@ struct Loop {
     last: Option<Instant>,
     next_sweep: Instant,
     last_error: HashMap<Key, String>,
+    /// (id, name, repo count) of every environment at the last resync.
+    envs_seen: Option<Vec<(String, String, usize)>>,
 }
 
 impl Loop {
@@ -95,6 +100,7 @@ impl Loop {
             last: None,
             next_sweep: Instant::now() + SWEEP_EVERY,
             last_error: HashMap::new(),
+            envs_seen: None,
         }
     }
 
@@ -128,7 +134,13 @@ impl Loop {
     /// Watch exactly the repos the environments list (that exist on disk).
     fn resync(&mut self) {
         let mut want: HashMap<PathBuf, Key> = HashMap::new();
-        for env in self.store.load_all().envs {
+        let envs = self.store.load_all().envs;
+        let seen: Vec<(String, String, usize)> = envs.iter().map(|e| (e.id.clone(), e.name.clone(), e.repos.len())).collect();
+        if self.envs_seen.as_ref().is_some_and(|prev| prev != &seen) {
+            (self.emit)("sf-envs-changed", json!({}));
+        }
+        self.envs_seen = Some(seen);
+        for env in envs {
             for r in &env.repos {
                 let p = PathBuf::from(&r.path);
                 if p.is_dir() {

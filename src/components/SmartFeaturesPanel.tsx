@@ -154,12 +154,13 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
         soon(b.envId, true);
       },
       autoBranchFailed: ({ error }) => showToast(error, "error"),
+      envsChanged: () => void loadEnvs().then((list) => refreshAll(list)),
     });
     return () => {
       off();
       timers.forEach((t) => window.clearTimeout(t));
     };
-  }, [loadEnvs, refreshEnv]);
+  }, [loadEnvs, refreshEnv, refreshAll]);
 
   /** Run an environment-level action with a busy flag, then reload. */
   const withEnv = async (env: SmartEnv, fn: () => Promise<void>) => {

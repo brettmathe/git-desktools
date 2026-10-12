@@ -282,8 +282,8 @@ user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
   (Add repo…, Add from folder… with a checklist, Add open tabs, labels, base overrides, shared base).
   Panel UI state lives in `settings.json` as `smartFeatures`.
 - Deviations from the plan: which environment holds a repo is derived from the env files rather than
-  stored in a `repoIndex`, so the two can't drift; there's no cross-process lock file yet (one app
-  instance is assumed); environment repos without an open tab are refreshed by the panel (focus +
+  stored in a `repoIndex`, so the two can't drift; the cross-process lock is an `flock` on
+  `smart-features/.lock` (added 2026-10-11 with the skills), taken for every write; environment repos without an open tab are refreshed by the panel (focus +
   every 30 s) and fetched by **Fetch all**, not by background auto-fetch yet.
 - Verified: 6 Rust tests (`cargo test smart`) and a headless-Chrome run through the dev bridge
   against throwaway repos (create via Add from folder + Add open tabs, dots for each state,
@@ -364,6 +364,28 @@ user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
 - Not done (Phase 4): reconciling orphan pins (a pin whose feature is gone), **Locate…** for moved
   repos, export/import, Update from base, Move commits to feature, Launchpad section, and a warning about
   open terminals in affected repos.
+
+**Claude Code skill: `smart-environment` (2026-10-11).** The app ships a Claude Code plugin in
+`src-tauri/claude-plugin/` (bundled as resources; in dev it's read from the source folder). Terminals
+opened in the app load it: the Claude terminal starts `claude` with `--plugin-dir`, and in zsh a
+`$ZDOTDIR` wrapper (`pty.rs` `ZSH_FILES`) sources the user's own zsh files and then defines
+`claude()` to add `--plugin-dir`; it restores the user's `ZDOTDIR` at the end so nested shells are
+untouched. The skill asks for the name, which repos and an optional shared base, then runs
+`smart_env.py` (Python 3 stdlib), which scans a folder (any depth), applies the app's rules (unique
+name, one environment per repo, real paths, non-bare) and writes `env-<id>.json` + the index. It only
+creates environments; edits stay in the app. The watcher emits `sf-envs-changed` when the set of
+environments changes on disk, so the panel shows it within ~10 s.
+
+A second skill, `smart-environment-add-repo`, handles "add crux_common to RGT": `smart_env.py
+find-repo` (repos in environments by folder name or label, then a scan of given folders) and
+`add-repo --env E --repo P --move`. A repo can be in only one environment (one working folder, one
+checked-out branch), so adding moves it. The move is refused while the old environment has an
+unfinished switch or any feature there touched the repo (recorded in the feature, a pinned stash, or
+the feature's local branch exists); the fix is Finish in the app. It removes the repo from the old
+environment before adding it to the new one, so a crash leaves it in neither, never both. The repo
+keeps its id, label and base override. Both skills share `claude-plugin/scripts/smart_env.py` and
+take the same `flock` as the app.
+
 - Next: Phase 4 (polish) when asked, then a manual run with the real RGT repos.
 
 ## Phase 2 (not in v1 unless asked)

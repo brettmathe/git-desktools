@@ -185,6 +185,17 @@ impl SmartStore {
         self.0.ops.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// Exclusive lock on `<dir>/.lock` across processes (the smart-environment
+    /// skill's helper takes the same `flock` before it edits env files), held
+    /// for a read-modify-write. Released when the File drops. Best effort: if
+    /// the folder can't be created, writes go ahead under the in-process lock.
+    fn file_lock(&self) -> Option<std::fs::File> {
+        std::fs::create_dir_all(&self.0.dir).ok()?;
+        let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.0.dir.join(".lock")).ok()?;
+        f.lock().ok()?;
+        Some(f)
+    }
+
     fn env_path(&self, id: &str) -> PathBuf {
         self.0.dir.join(format!("env-{id}.json"))
     }
@@ -253,6 +264,7 @@ impl SmartStore {
     /// a repo belongs to only one environment.
     pub fn save(&self, mut env: SmartEnv) -> CmdResult<SmartEnv> {
         let _guard = self.0.lock.lock().unwrap();
+        let _flock = self.file_lock();
         env.name = env.name.trim().to_string();
         if env.name.is_empty() {
             return Err("Give the environment a name.".into());
@@ -326,6 +338,7 @@ impl SmartStore {
     /// Forget an environment. Never touches the repos themselves.
     pub fn delete(&self, id: &str) -> CmdResult<()> {
         let _guard = self.0.lock.lock().unwrap();
+        let _flock = self.file_lock();
         let mut warnings = Vec::new();
         if let Some(env) = self.read_env(id, &mut warnings) {
             if env.has_parked_work() || env.active_feature_id.is_some() || env.journal.is_some() {
@@ -356,6 +369,7 @@ impl SmartStore {
     /// Read-modify-write one environment. `f` sees the latest saved version.
     pub(crate) fn update<T>(&self, id: &str, f: impl FnOnce(&mut SmartEnv) -> CmdResult<T>) -> CmdResult<(SmartEnv, T)> {
         let _guard = self.0.lock.lock().unwrap();
+        let _flock = self.file_lock();
         let mut env = self.read_env(id, &mut Vec::new()).ok_or_else(|| GONE.to_string())?;
         if env.version > VERSION {
             return Err(format!("\"{}\" was saved by a newer git-desktools; update the app to change it.", env.name));
