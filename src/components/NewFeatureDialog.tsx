@@ -115,9 +115,9 @@ export function NewFeatureDialog({ env, onClose, onStarted }: Props) {
             </p>
           )}
           {active && (
-            <p className="sf-warn-text">
-              “{active.name}” is active. Starting this feature sends its repos back to base, so commit its changes
-              first.
+            <p className="dim">
+              “{active.name}” is active. Its uncommitted changes are parked and its repos go back to base; switch back
+              to it any time.
             </p>
           )}
         </div>

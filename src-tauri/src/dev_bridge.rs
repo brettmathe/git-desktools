@@ -20,6 +20,7 @@
 use crate::git::{self, NetLocks};
 use crate::smart::{self, SmartStore};
 use crate::smart_features as sf;
+use crate::smart_switch as sw;
 use crate::smart_watch::{self, SmartWatcher};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -46,7 +47,18 @@ const MUTATING: &[&str] = &[
 ];
 
 const SF_MUTATING: &[&str] =
-    &["sf_start_feature", "sf_back_to_base", "sf_move_to_feature", "sf_checkout_remote", "sf_push_all"];
+    &[
+        "sf_start_feature",
+        "sf_preflight",
+        "sf_back_to_base",
+        "sf_move_to_feature",
+        "sf_checkout_remote",
+        "sf_push_all",
+        "sf_switch_feature",
+        "sf_resume_switch",
+        "sf_mark_resolved",
+        "sf_finish_feature",
+    ];
 
 fn s(a: &Value, k: &str) -> String {
     a.get(k).and_then(Value::as_str).unwrap_or_default().to_string()
@@ -144,8 +156,18 @@ fn smart_dispatch(b: &Bridge, cmd: &str, a: &Value) -> Result<Value, String> {
         "sf_scan_folder" => to(Ok(smart::bridge::scan_folder(store, &s(a, "path"), env_id.as_deref()))),
         "sf_status" => to(smart::bridge::status(store, &s(a, "envId"))),
         "sf_check_branch" => to(sf::check_branch(&store.get(&s(a, "envId"))?, &s(a, "branch"))),
-        "sf_start_feature" => to(sf::start_feature(store, &s(a, "envId"), &s(a, "name"), &s(a, "branch"), flag(a, "adopt"))),
-        "sf_back_to_base" => to(sf::back_to_base(store, &s(a, "envId"))),
+        "sf_start_feature" => {
+            to(sf::start_feature(store, &b.locks, &s(a, "envId"), &s(a, "name"), &s(a, "branch"), flag(a, "adopt")))
+        }
+        "sf_back_to_base" => to(sw::switch(store, &b.locks, &s(a, "envId"), None, &|_| {})),
+        "sf_preflight" => to(sw::preflight(store, &s(a, "envId"), opt(a, "targetId").as_deref())),
+        "sf_switch_feature" => to(sw::switch(store, &b.locks, &s(a, "envId"), opt(a, "targetId").as_deref(), &|_| {})),
+        "sf_resume_switch" => to(sw::resume(store, &b.locks, &s(a, "envId"), &s(a, "mode"), &|_| {})),
+        "sf_mark_resolved" => to(sw::mark_resolved(store, &s(a, "envId"), &s(a, "featureId"), &s(a, "repoId"))),
+        "sf_finish_preview" => to(sw::finish_preview(store, &s(a, "envId"), &s(a, "featureId"))),
+        "sf_finish_feature" => {
+            to(sw::finish(store, &b.locks, &s(a, "envId"), &s(a, "featureId"), &list(a, "discard"), &|_| {}))
+        }
         "sf_move_to_feature" => to(sf::auto_branch(store, &s(a, "envId"), &s(a, "repoId"), true)),
         "sf_commit_guard" => to(Ok(sf::commit_guard(store, &s(a, "path")))),
         "sf_checkout_remote" => to(sf::checkout_remote(store, &s(a, "envId"), &s(a, "repoId"))),

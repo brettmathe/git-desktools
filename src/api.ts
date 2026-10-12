@@ -5,6 +5,8 @@ import type {
   BranchCheck,
   CommitDetail,
   CommitGuard,
+  FinishRepo,
+  Preflight,
   FileContent,
   FileDiff,
   RepoCheck,
@@ -16,6 +18,8 @@ import type {
   Settings,
   SmartEnv,
   SmartRepoStatus,
+  SwitchResult,
+  SwitchStep,
   WipStatus,
 } from "./types";
 
@@ -69,7 +73,18 @@ export const api = {
       branch,
       adopt,
     }),
-  sfBackToBase: (envId: string) => invoke<SmartEnv>("sf_back_to_base", { envId }),
+  sfBackToBase: (envId: string) => invoke<SwitchResult>("sf_back_to_base", { envId }),
+  sfPreflight: (envId: string, targetId: string | null) => invoke<Preflight>("sf_preflight", { envId, targetId }),
+  sfSwitchFeature: (envId: string, targetId: string | null) =>
+    invoke<SwitchResult>("sf_switch_feature", { envId, targetId }),
+  sfResumeSwitch: (envId: string, mode: "retry" | "rollback") =>
+    invoke<SwitchResult>("sf_resume_switch", { envId, mode }),
+  sfMarkResolved: (envId: string, featureId: string, repoId: string) =>
+    invoke<SmartEnv>("sf_mark_resolved", { envId, featureId, repoId }),
+  sfFinishPreview: (envId: string, featureId: string) =>
+    invoke<FinishRepo[]>("sf_finish_preview", { envId, featureId }),
+  sfFinishFeature: (envId: string, featureId: string, discard: string[]) =>
+    invoke<SwitchResult>("sf_finish_feature", { envId, featureId, discard }),
   sfMoveToFeature: (envId: string, repoId: string) =>
     invoke<AutoBranched | null>("sf_move_to_feature", { envId, repoId }),
   sfCommitGuard: (path: string) => invoke<CommitGuard | null>("sf_commit_guard", { path }),
@@ -155,4 +170,12 @@ export function attachPty(id: number, handler: PtyHandler): () => void {
   return () => {
     handlers.delete(id);
   };
+}
+
+/** Live steps of a running switch, Back to base or Finish. */
+export function onSwitchProgress(envId: string, cb: (step: SwitchStep) => void): () => void {
+  const sub = listen<{ envId: string; step: SwitchStep }>("sf-progress", (e) => {
+    if (e.payload.envId === envId) cb(e.payload.step);
+  });
+  return () => void sub.then((un) => un());
 }

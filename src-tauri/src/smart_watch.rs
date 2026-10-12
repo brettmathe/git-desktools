@@ -248,7 +248,7 @@ mod tests {
         let b = repo_with_origin(&s, "b", "main");
         let store = SmartStore::new(s.path("cfg"));
         let env = store.save(env_with("E", &[&a, &b])).unwrap();
-        crate::smart_features::start_feature(&store, &env.id, "", "feat/watch", false).unwrap();
+        crate::smart_features::start_feature(&store, &crate::git::NetLocks::default(), &env.id, "", "feat/watch", false).unwrap();
 
         let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
         let sink = events.clone();

@@ -197,7 +197,50 @@ export interface SmartEnv {
   repos: SmartRepo[];
   activeFeatureId: string | null;
   features: SmartFeature[];
-  journal: unknown;
+  /** An unfinished feature switch; null when idle. */
+  journal: SwitchJournal | null;
+}
+
+export interface SwitchStep {
+  repoId: string;
+  label: string;
+  action: "park" | "base" | "switch" | "restore";
+  featureId: string | null;
+  /** park: "changes" when there's work to stash; base/switch: the branch. */
+  detail: string | null;
+  status: "pending" | "done" | "failed" | "warning";
+  message: string | null;
+}
+
+export interface SwitchJournal {
+  op: string;
+  from: string | null;
+  to: string | null;
+  startedAt: number;
+  steps: SwitchStep[];
+}
+
+export interface Preflight {
+  from: string | null;
+  to: string | null;
+  problems: string[];
+  steps: SwitchStep[];
+}
+
+export interface SwitchResult {
+  env: SmartEnv;
+  warnings: string[];
+}
+
+export interface FinishRepo {
+  repoId: string;
+  label: string;
+  local: boolean;
+  hasUpstream: boolean;
+  unpushed: number;
+  merged: boolean;
+  parked: boolean;
+  atRisk: boolean;
 }
 
 export type Dot = "red" | "yellow" | "green" | "none";
@@ -235,6 +278,8 @@ export interface FeatureRef {
   /** Commits not on the upstream (or, with no upstream, not on base). */
   unpushed: number;
   aheadOfBase: number;
+  /** Parked (pinned) uncommitted changes exist here. */
+  parked: boolean;
 }
 
 export interface BranchCheck {

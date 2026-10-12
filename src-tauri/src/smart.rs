@@ -512,7 +512,7 @@ pub struct RepoStatus {
     staged: usize,
     unstaged: usize,
     untracked: usize,
-    conflicted: usize,
+    pub(crate) conflicted: usize,
     has_upstream: bool,
     ahead: usize,
     behind: usize,
@@ -520,7 +520,7 @@ pub struct RepoStatus {
     in_progress: Option<&'static str>,
     /// "red" | "yellow" | "green" | "none"
     dot: &'static str,
-    warning: Option<String>,
+    pub(crate) warning: Option<String>,
     /// Where each feature's branch exists in this repo (only features that have it).
     features: Vec<FeatureRef>,
 }
@@ -537,6 +537,8 @@ pub struct FeatureRef {
     /// Commits not on the upstream (or, with no upstream, not on base).
     unpushed: usize,
     ahead_of_base: usize,
+    /// Parked (pinned) uncommitted changes exist for this feature here.
+    parked: bool,
 }
 
 fn feature_refs(repo: &Repository, env: &SmartEnv, base: Option<&str>) -> Vec<FeatureRef> {
@@ -546,10 +548,12 @@ fn feature_refs(repo: &Repository, env: &SmartEnv, base: Option<&str>) -> Vec<Fe
         .filter_map(|f| {
             let local = repo.find_branch(&f.branch, BranchType::Local).ok();
             let remote = repo.find_reference(&format!("refs/remotes/origin/{}", f.branch)).is_ok();
-            if local.is_none() && !remote {
+            let parked = repo.find_reference(&crate::smart_switch::pin_ref(&f.id)).is_ok();
+            if local.is_none() && !remote && !parked {
                 return None;
             }
-            let mut out = FeatureRef { feature_id: f.id.clone(), local: local.is_some(), remote, ..Default::default() };
+            let mut out =
+                FeatureRef { feature_id: f.id.clone(), local: local.is_some(), remote, parked, ..Default::default() };
             if let Some(tip) = local.as_ref().and_then(|b| b.get().target()) {
                 if let Some(t) = base_tip {
                     out.ahead_of_base = repo.graph_ahead_behind(tip, t).map(|(a, _)| a).unwrap_or(0);
@@ -677,6 +681,13 @@ fn repo_status(env: &SmartEnv, r: &SmartRepo) -> RepoStatus {
             "On {}, expected {}.",
             s.branch.as_deref().unwrap_or("?"),
             s.expected_branch.as_deref().unwrap_or("?")
+        ))
+    } else if let Some(f) = active.filter(|f| {
+        s.branch.as_deref() == Some(f.branch.as_str()) && s.features.iter().any(|x| x.feature_id == f.id && x.parked)
+    }) {
+        Some(format!(
+            "Parked changes for \"{}\" weren't fully restored. Resolve any conflicts, then choose Mark resolved.",
+            f.name
         ))
     } else if let Some(f) = active.filter(|f| s.branch.as_deref() == Some(f.branch.as_str()) && !s.has_upstream) {
         // Auto-branch made a local branch from base while a teammate's branch of

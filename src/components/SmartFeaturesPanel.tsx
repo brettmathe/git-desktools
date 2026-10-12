@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorText, onSmartEvents } from "../api";
 import { showToast } from "../toast";
 import { notifyReposChanged } from "../util";
-import type { Dot, SmartEnv, SmartFeature, SmartFeaturesUi, SmartRepoStatus } from "../types";
+import type { Dot, SmartEnv, SmartFeature, SmartFeaturesUi, SmartRepoStatus, SwitchResult } from "../types";
 import { EnvironmentDialog } from "./EnvironmentDialog";
+import { FinishFeatureDialog } from "./FinishFeatureDialog";
 import { NewFeatureDialog } from "./NewFeatureDialog";
+import { SwitchFeatureDialog } from "./SwitchFeatureDialog";
 import { BranchIcon, ChevronIcon, FetchIcon, MoreIcon, PlusIcon, PushIcon, RefreshIcon, WarningIcon } from "./icons";
 
 interface Props {
@@ -30,6 +32,9 @@ function featureSummary(f: SmartFeature, st: SmartRepoStatus[] | undefined) {
   return {
     repos: Object.keys(f.repos).length,
     unpushed: local.reduce((n, { x }) => n + x.unpushed, 0),
+    parked: refs.filter(({ x }) => x.parked).length,
+    /** Checked out, but its parked changes are still pinned: the restore conflicted. */
+    unresolved: refs.filter(({ s, x }) => x.parked && s.branch === f.branch).map(({ s }) => s),
     /** Repos where only origin/<branch> exists (a teammate's work). */
     remoteOnly: refs.filter(({ s, x }) => x.remote && !x.local && !(s.repoId in f.repos)).map(({ s }) => s),
   };
@@ -63,6 +68,9 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
   const [starting, setStarting] = useState<SmartEnv | null>(null);
   const [renaming, setRenaming] = useState<{ env: SmartEnv; feature: SmartFeature; name: string } | null>(null);
   const [working, setWorking] = useState<Set<string>>(new Set());
+  const [switching, setSwitching] = useState<{ env: SmartEnv; target: SmartFeature | null } | null>(null);
+  const [finishing, setFinishing] = useState<{ env: SmartEnv; feature: SmartFeature } | null>(null);
+  const [featureMenu, setFeatureMenu] = useState<string | null>(null);
   const envsRef = useRef(envs);
   envsRef.current = envs;
 
@@ -173,11 +181,66 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
     }
   };
 
-  const backToBase = (env: SmartEnv) =>
+  const backToBase = (env: SmartEnv) => {
+    setMenu(null);
+    setSwitching({ env, target: null });
+  };
+
+  /** After a switch, Back to base or Finish dialog ran (result null = it failed). */
+  const afterRun = (env: SmartEnv, result: SwitchResult | null, success?: string) => {
+    if (result) {
+      if (success) showToast(success, "success");
+      for (const w of result.warnings) showToast(w, "error");
+    }
+    void withEnv(env, async () => {});
+  };
+
+  const resumeSwitch = (env: SmartEnv, mode: "retry" | "rollback") =>
     withEnv(env, async () => {
-      await api.sfBackToBase(env.id);
-      showToast(`${env.name} is back on base`, "success");
+      const r = await api.sfResumeSwitch(env.id, mode);
+      const f = r.env.features.find((x) => x.id === r.env.activeFeatureId);
+      showToast(
+        mode === "retry"
+          ? `Switch finished: ${f ? `“${f.name}”` : "base"} is active`
+          : `Rolled back to ${f ? `“${f.name}”` : "base"}`,
+        "success",
+      );
+      for (const w of r.warnings) showToast(w, "error");
     });
+
+  const markResolved = (env: SmartEnv, f: SmartFeature, s: SmartRepoStatus) =>
+    withEnv(env, async () => {
+      await api.sfMarkResolved(env.id, f.id, s.repoId);
+      showToast(`${s.label}: parked changes marked resolved`, "success");
+    });
+
+  const journalBanner = (env: SmartEnv) => {
+    const j = env.journal;
+    if (!j) return null;
+    const name = (id: string | null) => (id ? `“${env.features.find((f) => f.id === id)?.name ?? "?"}”` : "base");
+    const failed = j.steps.find((s) => s.status === "failed");
+    const busy = working.has(env.id);
+    return (
+      <div className="sf-journal">
+        <div>
+          <WarningIcon size={12} /> The switch from {name(j.from)} to {name(j.to)} didn't finish.
+        </div>
+        {failed && (
+          <div className="dim small mono sf-journal-error">
+            {failed.label}: {failed.message}
+          </div>
+        )}
+        <div className="sf-journal-actions">
+          <button className="btn small" disabled={busy} onClick={() => void resumeSwitch(env, "rollback")}>
+            Roll back to {name(j.from)}
+          </button>
+          <button className="btn small primary" disabled={busy} onClick={() => void resumeSwitch(env, "retry")}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   const pushAll = (env: SmartEnv, f: SmartFeature) =>
     withEnv(env, async () => {
@@ -353,6 +416,25 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
             <PushIcon size={13} className={busy ? "spin-slow" : undefined} />
           </button>
         </div>
+        {sum.unresolved.map((s) => (
+          <div key={s.repoId} className="sf-remote-only">
+            <WarningIcon size={12} className="sf-warn" />
+            <span className="sf-repo-name">{s.label}</span>
+            <span className="dim small">parked changes conflicted</span>
+            <button
+              className="btn small"
+              disabled={busy || s.conflicted > 0}
+              title={
+                s.conflicted > 0
+                  ? "Resolve the conflicts and stage the files first"
+                  : "The parked changes are applied; forget the parked copy"
+              }
+              onClick={() => void markResolved(env, f, s)}
+            >
+              Mark resolved
+            </button>
+          </div>
+        ))}
         {sum.remoteOnly.map((s) => (
           <div key={s.repoId} className="sf-remote-only">
             <span className="sf-repo-name">{s.label}</span>
@@ -389,15 +471,57 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
               <span className="dim small sf-feature-sum">
                 {plural(sum.repos, "repo")}
                 {sum.unpushed > 0 && ` · ↑${sum.unpushed}`}
+                {sum.parked > 0 && (
+                  <span title={`Parked changes in ${plural(sum.parked, "repo")}`}> · 📦{sum.parked}</span>
+                )}
               </span>
               <button
-                className="icon-btn"
-                title={sum.unpushed ? `Push ${f.branch}` : "Nothing to push"}
-                disabled={working.has(env.id) || sum.unpushed === 0}
-                onClick={() => void pushAll(env, f)}
+                className="btn small"
+                disabled={working.has(env.id) || !!env.journal}
+                onClick={() => setSwitching({ env, target: f })}
               >
-                <PushIcon size={12} />
+                Switch
               </button>
+              <button
+                className="icon-btn"
+                title="More"
+                onClick={() => setFeatureMenu(featureMenu === f.id ? null : f.id)}
+              >
+                <MoreIcon size={13} />
+              </button>
+              {featureMenu === f.id && (
+                <>
+                  <div className="backdrop" onMouseDown={() => setFeatureMenu(null)} />
+                  <div className="popover sf-menu sf-feature-menu">
+                    <button
+                      disabled={sum.unpushed === 0}
+                      onClick={() => {
+                        setFeatureMenu(null);
+                        void pushAll(env, f);
+                      }}
+                    >
+                      Push all
+                    </button>
+                    <button
+                      onClick={() => {
+                        setFeatureMenu(null);
+                        setRenaming({ env, feature: f, name: f.name });
+                      }}
+                    >
+                      Rename…
+                    </button>
+                    <button
+                      className="danger"
+                      onClick={() => {
+                        setFeatureMenu(null);
+                        setFinishing({ env, feature: f });
+                      }}
+                    >
+                      Finish…
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           );
         })}
@@ -461,7 +585,16 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
                     >
                       Rename feature…
                     </button>
-                    <button onClick={() => void backToBase(env)}>Back to base</button>
+                    <button onClick={() => backToBase(env)}>Back to base…</button>
+                    <button
+                      className="danger"
+                      onClick={() => {
+                        setMenu(null);
+                        setFinishing({ env, feature: activeOf(env)! });
+                      }}
+                    >
+                      Finish feature…
+                    </button>
                   </>
                 )}
                 <div className="sf-menu-sep" />
@@ -489,6 +622,7 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
         </div>
         {open && (
           <div className="sf-env-body">
+            {journalBanner(env)}
             {featureBar(env, st)}
             {!st && loading.has(env.id) && <div className="sf-empty">Reading status…</div>}
             {st && st.length === 0 && (
@@ -594,6 +728,30 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
             void withEnv(env, async () => {
               if (pull) await pullBases(env);
             });
+          }}
+        />
+      )}
+      {switching && (
+        <SwitchFeatureDialog
+          env={switching.env}
+          target={switching.target}
+          onClose={() => setSwitching(null)}
+          onDone={(res) => {
+            const { env, target } = switching;
+            if (res) setSwitching(null);
+            afterRun(env, res, target ? `Switched to “${target.name}”` : `${env.name} is back on base`);
+          }}
+        />
+      )}
+      {finishing && (
+        <FinishFeatureDialog
+          env={finishing.env}
+          feature={finishing.feature}
+          onClose={() => setFinishing(null)}
+          onDone={(res) => {
+            const { env, feature } = finishing;
+            setFinishing(null);
+            afterRun(env, res, `Finished “${feature.name}”`);
           }}
         />
       )}

@@ -109,7 +109,7 @@ pub struct GitRun {
     pub progress: Option<Progress>,
 }
 
-fn git_command(cwd: &Path) -> Command {
+pub(crate) fn git_command(cwd: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1150,6 +1150,9 @@ pub async fn commit_impl(
     amend: bool,
 ) -> CmdResult<String> {
     blocking(move || {
+        if let Some(msg) = store.as_ref().and_then(|s| crate::smart_features::switch_running(s, &path)) {
+            return Err(msg);
+        }
         if let Some(guard) = store.as_ref().and_then(|s| crate::smart_features::commit_guard(s, &path)) {
             return Err(crate::smart_features::guard_message(&guard));
         }

@@ -2109,3 +2109,92 @@ button.plain {
 .sf-warn-text {
   color: var(--amber);
 }
+
+/* Smart Features: switching */
+.sf-feature-row {
+  position: relative;
+}
+.sf-feature-menu {
+  top: 26px;
+  right: 6px;
+  width: 140px;
+}
+.sf-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.sf-journal {
+  margin: 2px 8px 6px 24px;
+  padding: 8px 10px;
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.sf-journal svg {
+  color: var(--amber);
+  vertical-align: -1px;
+}
+.sf-journal-error {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 80px;
+  overflow: auto;
+}
+.sf-journal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sf-switch-modal {
+  width: min(600px, calc(100vw - 32px));
+}
+.sf-switch-modal p {
+  margin: 0 0 10px;
+}
+.sf-switch-steps {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: var(--bg-deep);
+  margin-bottom: 10px;
+}
+.sf-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  min-width: 0;
+}
+.sf-switch-row:last-child {
+  border-bottom: none;
+}
+.sf-switch-row .dim {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sf-switch-state {
+  width: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  color: var(--green);
+}
+.sf-risk {
+  margin-left: auto;
+  color: var(--amber);
+  flex-shrink: 0;
+}
+.sf-problems {
+  margin: 0 0 10px;
+  padding-left: 0;
+  list-style: none;
+}
+.sf-problems li {
+  padding: 3px 0;
+  color: var(--amber);
+}

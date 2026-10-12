@@ -4,6 +4,7 @@ mod pty;
 mod settings;
 mod smart;
 mod smart_features;
+mod smart_switch;
 mod smart_watch;
 
 #[cfg(test)]
@@ -108,7 +109,13 @@ pub fn run() {
             smart::sf_status,
             smart_features::sf_check_branch,
             smart_features::sf_start_feature,
-            smart_features::sf_back_to_base,
+            smart_switch::sf_back_to_base,
+            smart_switch::sf_preflight,
+            smart_switch::sf_switch_feature,
+            smart_switch::sf_resume_switch,
+            smart_switch::sf_mark_resolved,
+            smart_switch::sf_finish_preview,
+            smart_switch::sf_finish_feature,
             smart_features::sf_move_to_feature,
             smart_features::sf_commit_guard,
             smart_features::sf_checkout_remote,

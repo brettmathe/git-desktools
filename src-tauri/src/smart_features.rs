@@ -8,6 +8,7 @@
 //! it's safe while an editor is still writing files.
 
 use crate::git::{blocking, head_branch, is_dirty, now_secs, run_git, CmdResult, GitRun, NetLocks, BUSY};
+use crate::smart_switch::switch_locked;
 use crate::smart::{base_tip, new_id, resolve_base, Feature, FeatureRepo, SmartEnv, SmartRepo, SmartStore};
 use git2::{BranchType, Repository, RepositoryState};
 use serde::Serialize;
@@ -17,7 +18,7 @@ use tauri::{AppHandle, Manager, State};
 
 const PUSH_THREADS: usize = 4;
 
-fn git(cwd: &Path, args: &[&str]) -> CmdResult<()> {
+pub(crate) fn git(cwd: &Path, args: &[&str]) -> CmdResult<()> {
     run_git(cwd, GitRun { args: args.iter().map(|s| s.to_string()).collect(), ..Default::default() })
 }
 
@@ -25,11 +26,11 @@ fn open_repo(r: &SmartRepo) -> CmdResult<Repository> {
     Repository::open(&r.path).map_err(|_| format!("{}: can't open the repository at {}", r.label, r.path))
 }
 
-fn base_of(env: &SmartEnv, r: &SmartRepo, repo: &Repository) -> Option<String> {
+pub(crate) fn base_of(env: &SmartEnv, r: &SmartRepo, repo: &Repository) -> Option<String> {
     resolve_base(repo, r.base_branch.as_deref(), env.settings.shared_base.as_deref())
 }
 
-fn local_branch_exists(repo: &Repository, name: &str) -> bool {
+pub(crate) fn local_branch_exists(repo: &Repository, name: &str) -> bool {
     repo.find_branch(name, BranchType::Local).is_ok()
 }
 
@@ -140,7 +141,20 @@ pub struct AutoBranched {
 /// Returns what happened, or None when there was nothing to do.
 pub fn auto_branch(store: &SmartStore, env_id: &str, repo_id: &str, force: bool) -> CmdResult<Option<AutoBranched>> {
     let _op = store.op_lock();
+    auto_branch_locked(store, env_id, repo_id, force)
+}
+
+/// `auto_branch` for callers that already hold `op_lock`.
+pub(crate) fn auto_branch_locked(
+    store: &SmartStore,
+    env_id: &str,
+    repo_id: &str,
+    force: bool,
+) -> CmdResult<Option<AutoBranched>> {
     let env = store.get(env_id)?;
+    if env.journal.is_some() {
+        return Ok(None); // a switch is running or needs recovery
+    }
     let Some(feature) = env.active_feature().cloned() else { return Ok(None) };
     let r = env.repo(repo_id)?.clone();
     let Ok(repo) = Repository::open(&r.path) else { return Ok(None) };
@@ -248,6 +262,14 @@ pub fn commit_guard(store: &SmartStore, path: &str) -> Option<CommitGuard> {
     })
 }
 
+/// Some(message) while the repo's environment is mid-switch (or needs recovery).
+pub fn switch_running(store: &SmartStore, path: &str) -> Option<String> {
+    let (env, _) = store.find_repo(path)?;
+    env.journal.is_some().then(|| {
+        format!("A feature switch in {} is running or didn't finish. Wait for it, or retry or roll it back first.", env.name)
+    })
+}
+
 pub fn guard_message(g: &CommitGuard) -> String {
     format!(
         "\"{}\" is active in {}, so this commit belongs on {}, not {}. Move the changes to {} first.",
@@ -264,61 +286,20 @@ pub struct StartResult {
     env: SmartEnv,
     /// Repos moved onto the branch right away (they already had changes on base).
     moved: Vec<AutoBranched>,
-    warnings: Vec<String>,
-}
-
-/// Return every repo of the active feature to base and deactivate it. Refuses
-/// if any of those repos has uncommitted changes: parking them in a stash comes
-/// with feature switching.
-fn back_to_base_locked(store: &SmartStore, env_id: &str) -> CmdResult<()> {
-    let env = store.get(env_id)?;
-    let Some(feature) = env.active_feature().cloned() else { return Ok(()) };
-    let mut moves = Vec::new();
-    let mut blocked = Vec::new();
-    for r in env.repos.iter().filter(|r| feature.repos.contains_key(&r.id)) {
-        let Ok(repo) = Repository::open(&r.path) else { continue };
-        if head_branch(&repo).as_deref() != Some(feature.branch.as_str()) {
-            continue;
-        }
-        if repo.state() != RepositoryState::Clean {
-            blocked.push(format!("{} (an operation is in progress)", r.label));
-        } else if is_dirty(&repo) {
-            blocked.push(format!("{} (uncommitted changes)", r.label));
-        } else if let Some(base) = base_of(&env, r, &repo) {
-            moves.push((r.clone(), base));
-        } else {
-            blocked.push(format!("{} (no base branch)", r.label));
-        }
-    }
-    if !blocked.is_empty() {
-        return Err(format!(
-            "\"{}\" can't go back to base yet: commit or discard the changes first.\n{}",
-            feature.name,
-            blocked.join("\n")
-        ));
-    }
-    for (r, base) in &moves {
-        git(Path::new(&r.path), &["switch", base]).map_err(|err| format!("{}: couldn't switch to {base}.\n{err}", r.label))?;
-    }
-    store.update(env_id, |env| {
-        env.active_feature_id = None;
-        // A feature that never touched a repo has no state worth keeping.
-        env.features.retain(|f| f.id != feature.id || !f.repos.is_empty());
-        Ok(())
-    })?;
-    Ok(())
-}
-
-pub fn back_to_base(store: &SmartStore, env_id: &str) -> CmdResult<SmartEnv> {
-    let _op = store.op_lock();
-    back_to_base_locked(store, env_id)?;
-    store.get(env_id)
+    pub(crate) warnings: Vec<String>,
 }
 
 /// Start (or, with `adopt`, take over an existing branch as) a feature and make
 /// it active. Creates no branches: repos join as their files change. Repos that
 /// already have uncommitted changes on base move right away.
-pub fn start_feature(store: &SmartStore, env_id: &str, name: &str, branch: &str, adopt: bool) -> CmdResult<StartResult> {
+pub fn start_feature(
+    store: &SmartStore,
+    locks: &NetLocks,
+    env_id: &str,
+    name: &str,
+    branch: &str,
+    adopt: bool,
+) -> CmdResult<StartResult> {
     let branch = branch.trim().to_string();
     let mut warnings = Vec::new();
     {
@@ -338,7 +319,10 @@ pub fn start_feature(store: &SmartStore, env_id: &str, name: &str, branch: &str,
                 existing.iter().map(|r| r.label.as_str()).collect::<Vec<_>>().join(", ")
             ));
         }
-        back_to_base_locked(store, env_id)?;
+        // Park the active feature first (its changes go into its pinned stashes).
+        if env.active_feature_id.is_some() {
+            warnings.extend(switch_locked(store, locks, env_id, None, &|_| {})?.warnings);
+        }
 
         let feature = Feature {
             id: new_id("f"),
@@ -492,6 +476,7 @@ pub async fn sf_check_branch(store: State<'_, SmartStore>, env_id: String, branc
 
 #[tauri::command]
 pub async fn sf_start_feature(
+    app: AppHandle,
     store: State<'_, SmartStore>,
     env_id: String,
     name: String,
@@ -499,13 +484,7 @@ pub async fn sf_start_feature(
     adopt: bool,
 ) -> CmdResult<StartResult> {
     let store = store.inner().clone();
-    blocking(move || start_feature(&store, &env_id, &name, &branch, adopt)).await
-}
-
-#[tauri::command]
-pub async fn sf_back_to_base(store: State<'_, SmartStore>, env_id: String) -> CmdResult<SmartEnv> {
-    let store = store.inner().clone();
-    blocking(move || back_to_base(&store, &env_id)).await
+    blocking(move || start_feature(&store, &app.state::<NetLocks>(), &env_id, &name, &branch, adopt)).await
 }
 
 /// The commit guard's "Move to feature branch": branch even if the tree is clean.
@@ -549,16 +528,16 @@ pub async fn sf_push_all(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::smart::tests::{env_with, git as sh, repo_with_origin, Scratch};
     use std::path::PathBuf;
 
-    fn head(p: &Path) -> Option<String> {
+    pub(crate) fn head(p: &Path) -> Option<String> {
         head_branch(&Repository::open(p).unwrap())
     }
 
-    fn setup(tag: &str, names: &[&str]) -> (Scratch, SmartStore, String, Vec<PathBuf>) {
+    pub(crate) fn setup(tag: &str, names: &[&str]) -> (Scratch, SmartStore, String, Vec<PathBuf>) {
         let s = Scratch::new(tag);
         let paths: Vec<PathBuf> = names.iter().map(|n| repo_with_origin(&s, n, "main")).collect();
         let store = SmartStore::new(s.path("cfg"));
@@ -567,7 +546,7 @@ mod tests {
         (s, store, env.id, paths)
     }
 
-    fn repo_id(store: &SmartStore, env_id: &str, i: usize) -> String {
+    pub(crate) fn repo_id(store: &SmartStore, env_id: &str, i: usize) -> String {
         store.get(env_id).unwrap().repos[i].id.clone()
     }
 
@@ -580,7 +559,7 @@ mod tests {
         std::fs::write(p[0].join("a.txt"), "unstaged\n").unwrap();
         std::fs::write(p[0].join("new.txt"), "untracked\n").unwrap();
 
-        let out = start_feature(&store, &env_id, "Matchmaking", "feature/mm", false).unwrap();
+        let out = start_feature(&store, &NetLocks::default(), &env_id, "Matchmaking", "feature/mm", false).unwrap();
         assert_eq!(out.moved.len(), 1);
         assert_eq!(head(&p[0]).as_deref(), Some("feature/mm"));
         // Nothing was lost or re-staged in the move.
@@ -614,7 +593,7 @@ mod tests {
         sh(&p[0], &["add", "."]);
         sh(&p[0], &["commit", "-qm", "wip2"]);
         sh(&p[1], &["commit", "-qam", "wip"]);
-        let out = start_feature(&store, &env_id, " ", "fix/other", false).unwrap();
+        let out = start_feature(&store, &NetLocks::default(), &env_id, " ", "fix/other", false).unwrap();
         assert_eq!(out.env.active_feature().unwrap().name, "fix/other");
     }
 
@@ -641,8 +620,8 @@ mod tests {
         let check = check_branch(&env, "shared").unwrap();
         assert!(check.error.is_none());
         assert_eq!(check.repos.iter().filter(|r| r.local).count(), 1);
-        assert!(start_feature(&store, &env_id, "", "shared", false).unwrap_err().contains("Adopt"));
-        let out = start_feature(&store, &env_id, "", "shared", true).unwrap();
+        assert!(start_feature(&store, &NetLocks::default(), &env_id, "", "shared", false).unwrap_err().contains("Adopt"));
+        let out = start_feature(&store, &NetLocks::default(), &env_id, "", "shared", true).unwrap();
         assert!(out.warnings.is_empty(), "{:?}", out.warnings);
         assert_eq!(head(&p[1]).as_deref(), Some("shared"), "adopt checks the branch out where it exists");
         assert_eq!(head(&p[0]).as_deref(), Some("main"));
@@ -658,7 +637,7 @@ mod tests {
         let (_s, store, env_id, p) = setup("guard", &["a"]);
         let path = p[0].to_string_lossy().to_string();
         assert!(commit_guard(&store, &path).is_none(), "no active feature, no guard");
-        start_feature(&store, &env_id, "", "feat/g", false).unwrap();
+        start_feature(&store, &NetLocks::default(), &env_id, "", "feat/g", false).unwrap();
         let g = commit_guard(&store, &path).unwrap();
         assert_eq!((g.branch.as_str(), g.base.as_str()), ("feat/g", "main"));
 
@@ -684,36 +663,10 @@ mod tests {
     }
 
     #[test]
-    fn back_to_base_and_restart() {
-        let (_s, store, env_id, p) = setup("back", &["a", "b"]);
-        start_feature(&store, &env_id, "", "feat/one", false).unwrap();
-        std::fs::write(p[0].join("a.txt"), "x\n").unwrap();
-        auto_branch(&store, &env_id, &repo_id(&store, &env_id, 0), false).unwrap().unwrap();
-
-        // Uncommitted work blocks (parking it comes with switching).
-        assert!(back_to_base(&store, &env_id).unwrap_err().contains("a (uncommitted changes)"));
-        assert!(start_feature(&store, &env_id, "", "feat/two", false).is_err());
-        assert_eq!(store.get(&env_id).unwrap().active_feature().unwrap().branch, "feat/one");
-
-        sh(&p[0], &["commit", "-qam", "one"]);
-        let env = back_to_base(&store, &env_id).unwrap();
-        assert!(env.active_feature_id.is_none());
-        assert_eq!(head(&p[0]).as_deref(), Some("main"));
-        assert_eq!(env.features.len(), 1, "the feature with a branch is kept");
-
-        // A feature that never touched a repo is dropped when another starts.
-        start_feature(&store, &env_id, "", "feat/empty", false).unwrap();
-        start_feature(&store, &env_id, "", "feat/three", false).unwrap();
-        let env = store.get(&env_id).unwrap();
-        let branches: Vec<&str> = env.features.iter().map(|f| f.branch.as_str()).collect();
-        assert_eq!(branches, vec!["feat/one", "feat/three"]);
-    }
-
-    #[test]
     fn push_all_pushes_only_what_is_unpushed() {
         let (_s, store, env_id, p) = setup("push", &["a", "b", "c"]);
         let locks = NetLocks::default();
-        let started = start_feature(&store, &env_id, "", "feat/p", false).unwrap();
+        let started = start_feature(&store, &NetLocks::default(), &env_id, "", "feat/p", false).unwrap();
         let fid = started.env.active_feature_id.clone().unwrap();
         for (i, repo) in p.iter().take(2).enumerate() {
             std::fs::write(repo.join("a.txt"), format!("{i}\n")).unwrap();
@@ -747,7 +700,7 @@ mod tests {
         sh(&other, &["push", "-q", "origin", "feat/team"]);
         sh(&p[0], &["fetch", "-q"]);
 
-        let out = start_feature(&store, &env_id, "", "feat/team", false).unwrap();
+        let out = start_feature(&store, &NetLocks::default(), &env_id, "", "feat/team", false).unwrap();
         assert_eq!(head(&p[0]).as_deref(), Some("main"), "remote branches are never checked out automatically");
         assert!(out.env.active_feature().unwrap().repos.is_empty());
         checkout_remote(&store, &env_id, &repo_id(&store, &env_id, 0)).unwrap();

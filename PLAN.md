@@ -245,7 +245,7 @@ Make `app-icon.svg` (simple git-branch glyph on a rounded square) and run `pnpm 
 4. Screenshot the running app to compare against `docs/reference/` (use the `run` skill).
 5. Commit in logical chunks once it works (ask the user before the first commit).
 
-## Smart Features (approved; Phases 1–2 built)
+## Smart Features (approved; Phases 1–3 built)
 
 Approved by the user on 2026-10-11 as an exception to "keep it simple". The full plan lives in the
 user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
@@ -326,7 +326,45 @@ user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
   to base, teammate branch Check out, commit guard). The bridge runs the watcher too
   (`GDT_BRIDGE_NO_WATCH=1` turns it off) and refuses feature commands unless every repo of the
   environment is under `GDT_BRIDGE_WRITE_ROOT`.
-- Next: Phase 3 (switching with parked stashes, journal + recovery, Finish).
+
+**Status (2026-10-11): Phase 3 is built and verified.**
+- `src-tauri/src/smart_switch.rs`: a switch to feature T (or to base) *converges* every repo from its
+  current state: **park** (a repo on feature F's branch runs `git stash push --include-untracked`, tagged
+  `[sf <F-id>]`, pinned with `git update-ref refs/smart-features/<F-id>/stash`), **base** (`git switch
+  <base>`), **switch** (`git switch <T-branch>` where T's branch exists), **restore** (`git stash apply
+  --index <pin>`, falling back to a plain apply when the index can't be restored; on success the pin and
+  its stash-list entry are dropped). Each step checks git first, so running it again is safe: Retry =
+  switch to the journal's `to` again, Roll back = switch to its `from`. A stash made just before a crash
+  is found by its tag and pinned.
+- Preflight (read-only after an auto-branch pass) refuses, listing problems, for: missing folder,
+  merge/rebase in progress, `index.lock`, unresolved conflicts, detached HEAD, no base, a repo on a
+  branch that's neither base nor a feature's, uncommitted changes on base in a repo the target uses, or
+  parked changes left from a conflicted restore. The journal (`env.journal`: from, to, steps with
+  status) is written before the first step and after each; it's cleared on success. While it exists,
+  commits, auto-branch and other switches in that environment are refused, and the panel shows a banner
+  with **Retry** / **Roll back**. Fetch/pull/push locks are held for every repo during a switch.
+- A conflicting restore keeps the pin, leaves the conflict markers, and finishes the rest of the switch;
+  the repo shows "parked changes conflicted" with **Mark resolved** (allowed once no conflicts remain).
+- **Back to base** and starting a feature while another is active now park instead of refusing. Features
+  with no repos are kept (Finish removes them).
+- **Finish** (`sf_finish_preview`, `sf_finish_feature`): per repo, local branch, pushed/unpushed,
+  merged into `origin/<base>`, parked changes. Unpushed-and-unmerged commits or parked changes block
+  unless that repo is ticked to discard. If the feature is active it goes back to base first; then pins
+  and stash entries are dropped and local branches deleted. Remote branches are never deleted.
+- UI: Features list rows have **Switch** and ⋯ (Push all, Rename…, Finish…) and show 📦 for parked
+  changes; `SwitchFeatureDialog` (preflight summary per repo, problems, live step ticks from
+  `sf-progress`); `FinishFeatureDialog`; the recovery banner.
+- Verified: `cargo test` (28 pass; switching tests cover A→B→A restoring staged, staged+unstaged and
+  untracked files exactly, pins surviving `stash clear` + `reflog expire` + `gc --prune=now`, an
+  interrupted switch rolled back and retried, the stash-before-crash case, a conflicting restore +
+  Mark resolved, preflight blocking, and Finish blocking then discarding without touching origin). A
+  headless-Chrome run through the dev bridge did: start a second feature (parks the first), switch
+  back with everything restored, a blocked preflight (`index.lock`), a switch failed mid-way by a
+  `reference-transaction` hook → banner → Retry, and Finish requiring ticks.
+- Not done (Phase 4): reconciling orphan pins (a pin whose feature is gone), **Locate…** for moved
+  repos, export/import, Update from base, Move commits to feature, Launchpad section, and a warning about
+  open terminals in affected repos.
+- Next: Phase 4 (polish) when asked, then a manual run with the real RGT repos.
 
 ## Phase 2 (not in v1 unless asked)
 Discard changes, partial (hunk/line) staging, checkout branch (double-click), pull with rebase/merge, stash UI (Smart Features stashes are separate, see above), commit search/filter, blame/history, split diff, syntax highlighting, watching `.git` with a filesystem watcher instead of focus polling, OS notifications when auto-fetch finds new commits.
