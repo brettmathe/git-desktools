@@ -40,6 +40,8 @@ export const api = {
   wipStatus: (path: string) => invoke<WipStatus>("wip_status", { path }),
   stageFiles: (path: string, files: string[]) => invoke<void>("stage_files", { path, files }),
   unstageFiles: (path: string, files: string[]) => invoke<void>("unstage_files", { path, files }),
+  /** Throw away unstaged changes (untracked files are deleted). [] = all. */
+  discardFiles: (path: string, files: string[]) => invoke<void>("discard_files", { path, files }),
   headMessage: (path: string) => invoke<string>("head_message", { path }),
   commit: (path: string, message: string, amend: boolean) =>
     invoke<string>("commit", { path, message, amend }),

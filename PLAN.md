@@ -31,7 +31,7 @@ Test repos on this machine:
 - **Clone / fetch:** shell out to the user's `git` so existing credentials (SSH agent, osxkeychain, GCM) just work.
 - **Terminal:** docked panel at the bottom of each repo tab (not the external system terminal), `portable-pty` + xterm.js. Multiple sessions per repo ("Claude", "Shell").
 - **Diff view:** included in v1.
-- **WIP:** included in v1 **with staging and committing** (user confirmed via screenshot 08). Leave out the AI buttons, Discard/trash and a stash UI. (Smart Features creates, applies and drops its own named stashes internally; there is still no general stash browser or stash buttons.)
+- **WIP:** included in v1 **with staging and committing** (user confirmed via screenshot 08). Leave out the AI buttons and a stash UI. **Discard** was added on request (2026-10-11): right-click a file (or a folder in Tree view) in Unstaged Files → **Discard changes…**, always confirmed. Tracked files go back to their staged/committed content (`git restore --worktree`, literal pathspecs), so staged changes are kept; untracked files are deleted, along with folders that become empty; conflicted files are refused. The same right-click menu has Stage/Unstage and Copy file path. (Smart Features creates, applies and drops its own named stashes internally; there is still no general stash browser or stash buttons.)
 - **Commit vs. push:** Commit is **local only**. The toolbar **Push** button pushes all local commits on the current branch to its remote (user confirmed). The **Pull** button is in v1 too, **fast-forward only** (user confirmed).
 - **Auto-fetch:** every ~60s, fetch remote changes in the background but **never pull** (user confirmed).
 - Use `pnpm`. Install versions known to exist (already in `package.json`).
@@ -389,4 +389,4 @@ take the same `flock` as the app.
 - Next: Phase 4 (polish) when asked, then a manual run with the real RGT repos.
 
 ## Phase 2 (not in v1 unless asked)
-Discard changes, partial (hunk/line) staging, checkout branch (double-click), pull with rebase/merge, stash UI (Smart Features stashes are separate, see above), commit search/filter, blame/history, split diff, syntax highlighting, watching `.git` with a filesystem watcher instead of focus polling, OS notifications when auto-fetch finds new commits.
+Partial (hunk/line) staging, checkout branch (double-click), pull with rebase/merge, stash UI (Smart Features stashes are separate, see above), commit search/filter, blame/history, split diff, syntax highlighting, watching `.git` with a filesystem watcher instead of focus polling, OS notifications when auto-fetch finds new commits.

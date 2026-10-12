@@ -1,7 +1,14 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import type { FileChange, FileViewMode } from "../types";
 import { buildTree, splitPath, type TreeNode } from "../util";
 import { FolderIcon, ListIcon, StatusIcon, TreeIcon } from "./icons";
+
+export interface MenuItem {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+}
 
 interface Props {
   files: FileChange[];
@@ -10,10 +17,44 @@ interface Props {
   onOpen: (file: FileChange) => void;
   action?: (file: FileChange) => ReactNode;
   showStats?: boolean;
+  /** Right-click menu for a file, or for a folder in tree view (`files` = everything under it). */
+  contextMenu?: (target: { file: FileChange } | { folder: string; files: FileChange[] }) => MenuItem[];
 }
 
-export function FileList({ files, mode, selectedPath, onOpen, action, showStats }: Props) {
+/** Files under a tree folder node. */
+function filesUnder(n: TreeNode<FileChange>): FileChange[] {
+  return n.item ? [n.item] : n.children.flatMap(filesUnder);
+}
+
+export function FileList({ files, mode, selectedPath, onOpen, action, showStats, contextMenu }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    document.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+      document.removeEventListener("scroll", close, true);
+    };
+  }, [menu]);
+
+  const openMenu = (e: MouseEvent, items: MenuItem[] | undefined) => {
+    if (!items?.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Keep it on screen.
+    const x = Math.min(e.clientX, window.innerWidth - 230);
+    const y = Math.min(e.clientY, window.innerHeight - (items.length * 30 + 12));
+    setMenu({ x, y, items });
+  };
 
   const row = (f: FileChange, label: ReactNode, indent: number) => (
     <div
@@ -21,6 +62,7 @@ export function FileList({ files, mode, selectedPath, onOpen, action, showStats 
       className={`file-row${f.path === selectedPath ? " selected" : ""}`}
       style={{ paddingLeft: 10 + indent }}
       onClick={() => onOpen(f)}
+      onContextMenu={(e) => openMenu(e, contextMenu?.({ file: f }))}
       title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
     >
       <StatusIcon status={f.status} />
@@ -35,9 +77,39 @@ export function FileList({ files, mode, selectedPath, onOpen, action, showStats 
     </div>
   );
 
+  const menuView = menu && (
+    <>
+      <div
+        className="backdrop"
+        onMouseDown={() => setMenu(null)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu(null);
+        }}
+      />
+      <div className="context-menu" style={{ left: menu.x, top: menu.y }} role="menu">
+        {menu.items.map((item) => (
+          <button
+            key={item.label}
+            role="menuitem"
+            className={item.danger ? "danger" : undefined}
+            disabled={item.disabled}
+            onClick={() => {
+              setMenu(null);
+              item.onClick();
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+
   if (mode === "path") {
     return (
       <div className="file-list">
+        {menuView}
         {files.map((f) => {
           const [dir, base] = splitPath(f.path);
           return row(
@@ -62,6 +134,7 @@ export function FileList({ files, mode, selectedPath, onOpen, action, showStats 
           <div
             className="file-row folder"
             style={{ paddingLeft: 10 + depth * 14 }}
+            onContextMenu={(e) => openMenu(e, contextMenu?.({ folder: n.key, files: filesUnder(n) }))}
             onClick={() =>
               setCollapsed((s) => {
                 const next = new Set(s);
@@ -79,7 +152,12 @@ export function FileList({ files, mode, selectedPath, onOpen, action, showStats 
       ),
     );
 
-  return <div className="file-list">{render(buildTree(files, (f) => f.path), 0)}</div>;
+  return (
+    <div className="file-list">
+      {menuView}
+      {render(buildTree(files, (f) => f.path), 0)}
+    </div>
+  );
 }
 
 export function ViewModeToggle({ mode, onChange }: { mode: FileViewMode; onChange: (m: FileViewMode) => void }) {

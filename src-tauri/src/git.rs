@@ -1121,6 +1121,62 @@ pub async fn unstage_files(path: String, files: Vec<String>) -> CmdResult<()> {
     .await
 }
 
+/// Throw away unstaged changes. Tracked files go back to their staged (or
+/// committed) content, so staged changes are kept; untracked files are deleted.
+/// `files` empty = every unstaged change. Refuses conflicted files.
+#[tauri::command]
+pub async fn discard_files(path: String, files: Vec<String>) -> CmdResult<()> {
+    blocking(move || {
+        let repo = open(&path)?;
+        let root = PathBuf::from(root_of(&repo));
+        let mut opts = StatusOptions::new();
+        opts.include_untracked(true).recurse_untracked_dirs(true).exclude_submodules(true);
+        let statuses = repo.statuses(Some(&mut opts)).map_err(e)?;
+        let wanted: HashSet<&str> = files.iter().map(String::as_str).collect();
+        let (mut restore, mut delete, mut conflicted) = (Vec::new(), Vec::new(), Vec::new());
+        for entry in statuses.iter() {
+            let p = lossy(entry.path_bytes()).replace('\\', "/");
+            if !files.is_empty() && !wanted.contains(p.as_str()) {
+                continue;
+            }
+            let s = entry.status();
+            if s.contains(Status::CONFLICTED) {
+                conflicted.push(p);
+            } else if s.contains(Status::WT_NEW) {
+                delete.push(p);
+            } else if s.intersects(Status::WT_MODIFIED | Status::WT_DELETED | Status::WT_TYPECHANGE | Status::WT_RENAMED) {
+                restore.push(p);
+            }
+        }
+        if !conflicted.is_empty() {
+            return Err(format!(
+                "These files have merge conflicts; resolve them instead of discarding:\n{}",
+                conflicted.join("\n")
+            ));
+        }
+        // Literal pathspecs: a file named `*.ts` must not match every .ts file.
+        for chunk in restore.chunks(200) {
+            let paths: Vec<String> = chunk.iter().map(|p| format!(":(literal){p}")).collect();
+            run_git(&root, GitRun { args: with_paths(args(["restore", "--worktree"]), &paths), ..Default::default() })?;
+        }
+        for p in &delete {
+            let full = root.join(p);
+            // remove_file removes a symlink itself, never its target.
+            std::fs::remove_file(&full).map_err(|err| format!("Couldn't delete {p}: {err}"))?;
+            // Drop folders the delete left empty (git doesn't track folders).
+            let mut dir = full.parent();
+            while let Some(d) = dir.filter(|d| *d != root && d.starts_with(&root)) {
+                if std::fs::remove_dir(d).is_err() {
+                    break;
+                }
+                dir = d.parent();
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn head_message(path: String) -> CmdResult<String> {
     blocking(move || {
@@ -1381,6 +1437,54 @@ mod tests {
             built,
             json.len() / 1024
         );
+    }
+
+    #[test]
+    fn discard_keeps_staged_and_deletes_untracked() {
+        use std::process::Command;
+        let dir = std::env::temp_dir().join(format!("gdt-discard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = |a: &[&str]| {
+            let out = Command::new("git").current_dir(&dir).args(["-c", "user.name=T", "-c", "user.email=t@t"]).args(a).output().unwrap();
+            assert!(out.status.success(), "{a:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        g(&["init", "-q"]);
+        for f in ["a.txt", "b.txt", "c.txt", "*.txt"] {
+            std::fs::write(dir.join(f), "orig\n").unwrap();
+        }
+        g(&["add", "."]);
+        g(&["commit", "-qm", "init"]);
+        // a: staged + more unstaged edits. b: plain edit. c: deleted. *.txt: edited (a glob name).
+        std::fs::write(dir.join("a.txt"), "staged\n").unwrap();
+        g(&["add", "a.txt"]);
+        std::fs::write(dir.join("a.txt"), "staged plus unstaged\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "edit\n").unwrap();
+        std::fs::remove_file(dir.join("c.txt")).unwrap();
+        std::fs::write(dir.join("*.txt"), "edit\n").unwrap();
+        std::fs::create_dir_all(dir.join("new/deep")).unwrap();
+        std::fs::write(dir.join("new/deep/n.txt"), "untracked\n").unwrap();
+        let path = dir.to_string_lossy().to_string();
+        let read = |f: &str| std::fs::read_to_string(dir.join(f)).ok();
+
+        // One file named like a glob touches only itself.
+        tauri::async_runtime::block_on(discard_files(path.clone(), vec!["*.txt".into()])).unwrap();
+        assert_eq!(read("*.txt").as_deref(), Some("orig\n"));
+        assert_eq!(read("b.txt").as_deref(), Some("edit\n"));
+
+        // Untracked: deleted, with the folders it leaves empty.
+        tauri::async_runtime::block_on(discard_files(path.clone(), vec!["new/deep/n.txt".into()])).unwrap();
+        assert!(!dir.join("new").exists());
+
+        // Everything else: unstaged edits gone, the staged version kept.
+        tauri::async_runtime::block_on(discard_files(path.clone(), vec![])).unwrap();
+        assert_eq!(read("a.txt").as_deref(), Some("staged\n"));
+        assert_eq!(read("b.txt").as_deref(), Some("orig\n"));
+        assert_eq!(read("c.txt").as_deref(), Some("orig\n"));
+        let wip = tauri::async_runtime::block_on(wip_status(path.clone())).unwrap();
+        assert!(wip.unstaged.is_empty());
+        assert_eq!(wip.staged.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
