@@ -1995,3 +1995,117 @@ button.plain {
 .sf-confirm p {
   margin: 4px 0 8px;
 }
+
+/* Smart Features commit guard */
+.commit-guard {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.commit-guard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* Smart Features: features */
+.sf-menu-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-soft);
+}
+.sf-feature-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 8px 4px 24px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  min-width: 0;
+}
+.sf-feature-bar.none {
+  background: none;
+  padding-left: 2px;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.sf-star {
+  color: var(--amber);
+  flex-shrink: 0;
+}
+.sf-feature-name {
+  color: var(--text-bright);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 30px;
+}
+.sf-feature-branch {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 30px;
+  flex-shrink: 2;
+}
+.sf-feature-sum {
+  margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.sf-remote-only {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 2px 34px;
+  font-size: 12px;
+}
+.sf-remote-only .btn {
+  margin-left: auto;
+}
+.sf-features {
+  margin-top: 4px;
+}
+.sf-features-head {
+  padding: 4px 10px 2px 26px;
+  font-size: 11px;
+  color: var(--dimmer);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.sf-feature-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 26px;
+  min-width: 0;
+}
+.sf-feature-row .sf-feature-name {
+  font-weight: normal;
+}
+
+/* new feature dialog */
+.sf-feature-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+.sf-field-error {
+  margin: -6px 0 10px;
+  color: var(--red);
+  font-size: 12px;
+}
+.sf-feature-notes p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.sf-warn-text {
+  color: var(--amber);
+}

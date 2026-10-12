@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::smart_watch::SmartWatcher;
 use tauri::State;
 
 const VERSION: u32 = 1;
@@ -27,6 +28,7 @@ const SCAN_DEPTH: usize = 3;
 const SCAN_SKIP: &[&str] = &["node_modules", "target", "build", "dist", "Pods", "DerivedData"];
 const BASE_CANDIDATES: &[&str] = &["develop", "main", "master"];
 const STATUS_THREADS: usize = 8;
+const GONE: &str = "That environment no longer exists.";
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -102,6 +104,13 @@ pub struct SmartEnv {
 }
 
 impl SmartEnv {
+    pub(crate) fn active_feature(&self) -> Option<&Feature> {
+        let id = self.active_feature_id.as_ref()?;
+        self.features.iter().find(|f| &f.id == id)
+    }
+    pub(crate) fn repo(&self, id: &str) -> CmdResult<&SmartRepo> {
+        self.repos.iter().find(|r| r.id == id).ok_or_else(|| "That repository is no longer in the environment.".to_string())
+    }
     fn has_parked_work(&self) -> bool {
         self.features.iter().any(|f| f.repos.values().any(|r| r.parked_stash.is_some()))
     }
@@ -122,28 +131,36 @@ struct Index {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvList {
-    envs: Vec<SmartEnv>,
+    pub(crate) envs: Vec<SmartEnv>,
     warnings: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
 // Store
 
-pub struct SmartStore {
+/// Cheap to clone; clones share the same locks (the watcher thread holds one).
+#[derive(Clone)]
+pub struct SmartStore(Arc<StoreInner>);
+
+pub struct StoreInner {
     dir: PathBuf,
+    /// Guards the files.
     lock: Mutex<()>,
+    /// Serializes feature operations (start, auto-branch, back to base...) so the
+    /// watcher, the periodic sweep and a click can't branch the same repo twice.
+    ops: Mutex<()>,
 }
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn new_id(prefix: &str) -> String {
+pub(crate) fn new_id(prefix: &str) -> String {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let n = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{prefix}_{:x}{:x}", nanos & 0xffff_ffff_ffff, n)
 }
 
 /// Real path, so a repo reached through a symlink is still one repo.
-fn canonical(path: &str) -> String {
+pub(crate) fn canonical(path: &str) -> String {
     std::fs::canonicalize(path)
         .map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string())
         .unwrap_or_else(|_| path.trim_end_matches(['/', '\\']).to_string())
@@ -161,15 +178,19 @@ fn write_atomic(path: &Path, value: &impl Serialize) -> CmdResult<()> {
 
 impl SmartStore {
     pub fn new(dir: PathBuf) -> Self {
-        SmartStore { dir, lock: Mutex::new(()) }
+        SmartStore(Arc::new(StoreInner { dir, lock: Mutex::new(()), ops: Mutex::new(()) }))
+    }
+
+    pub(crate) fn op_lock(&self) -> MutexGuard<'_, ()> {
+        self.0.ops.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     fn env_path(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("env-{id}.json"))
+        self.0.dir.join(format!("env-{id}.json"))
     }
 
     fn read_index(&self) -> Index {
-        std::fs::read_to_string(self.dir.join(INDEX_FILE))
+        std::fs::read_to_string(self.0.dir.join(INDEX_FILE))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default()
@@ -205,14 +226,14 @@ impl SmartStore {
     /// Every environment, in display order. Env files missing from the index are
     /// adopted at the end so nothing on disk is ever silently hidden.
     pub fn load_all(&self) -> EnvList {
-        let _guard = self.lock.lock().unwrap();
+        let _guard = self.0.lock.lock().unwrap();
         self.load_all_locked()
     }
 
     fn load_all_locked(&self) -> EnvList {
         let mut warnings = Vec::new();
         let mut order = self.read_index().order;
-        if let Ok(entries) = std::fs::read_dir(&self.dir) {
+        if let Ok(entries) = std::fs::read_dir(&self.0.dir) {
             let mut extra: Vec<String> = entries
                 .flatten()
                 .filter_map(|d| {
@@ -231,7 +252,7 @@ impl SmartStore {
     /// Create or update an environment. Enforces: a name, no duplicate repos, and
     /// a repo belongs to only one environment.
     pub fn save(&self, mut env: SmartEnv) -> CmdResult<SmartEnv> {
-        let _guard = self.lock.lock().unwrap();
+        let _guard = self.0.lock.lock().unwrap();
         env.name = env.name.trim().to_string();
         if env.name.is_empty() {
             return Err("Give the environment a name.".into());
@@ -291,20 +312,20 @@ impl SmartStore {
         }
         env.version = VERSION;
 
-        std::fs::create_dir_all(&self.dir).map_err(e)?;
+        std::fs::create_dir_all(&self.0.dir).map_err(e)?;
         write_atomic(&self.env_path(&env.id), &env)?;
         let mut index = self.read_index();
         if !index.order.contains(&env.id) {
             index.order.push(env.id.clone());
         }
         index.version = VERSION;
-        write_atomic(&self.dir.join(INDEX_FILE), &index)?;
+        write_atomic(&self.0.dir.join(INDEX_FILE), &index)?;
         Ok(env)
     }
 
     /// Forget an environment. Never touches the repos themselves.
     pub fn delete(&self, id: &str) -> CmdResult<()> {
-        let _guard = self.lock.lock().unwrap();
+        let _guard = self.0.lock.lock().unwrap();
         let mut warnings = Vec::new();
         if let Some(env) = self.read_env(id, &mut warnings) {
             if env.has_parked_work() || env.active_feature_id.is_some() || env.journal.is_some() {
@@ -321,10 +342,36 @@ impl SmartStore {
         let _ = std::fs::remove_file(path.with_extension("json.bak"));
         let mut index = self.read_index();
         index.order.retain(|x| x != id);
-        if self.dir.exists() {
-            write_atomic(&self.dir.join(INDEX_FILE), &index)?;
+        if self.0.dir.exists() {
+            write_atomic(&self.0.dir.join(INDEX_FILE), &index)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn get(&self, id: &str) -> CmdResult<SmartEnv> {
+        let _guard = self.0.lock.lock().unwrap();
+        self.read_env(id, &mut Vec::new()).ok_or_else(|| GONE.to_string())
+    }
+
+    /// Read-modify-write one environment. `f` sees the latest saved version.
+    pub(crate) fn update<T>(&self, id: &str, f: impl FnOnce(&mut SmartEnv) -> CmdResult<T>) -> CmdResult<(SmartEnv, T)> {
+        let _guard = self.0.lock.lock().unwrap();
+        let mut env = self.read_env(id, &mut Vec::new()).ok_or_else(|| GONE.to_string())?;
+        if env.version > VERSION {
+            return Err(format!("\"{}\" was saved by a newer git-desktools; update the app to change it.", env.name));
+        }
+        let out = f(&mut env)?;
+        write_atomic(&self.env_path(&env.id), &env)?;
+        Ok((env, out))
+    }
+
+    /// The environment and repo entry for a repo root, if it's in one.
+    pub(crate) fn find_repo(&self, path: &str) -> Option<(SmartEnv, SmartRepo)> {
+        let target = canonical(path);
+        self.load_all().envs.into_iter().find_map(|env| {
+            let repo = env.repos.iter().find(|r| canonical(&r.path) == target).cloned()?;
+            Some((env, repo))
+        })
     }
 
     /// Name of the environment that already holds `path`, ignoring `except_env`.
@@ -342,7 +389,7 @@ impl SmartStore {
 // ---------------------------------------------------------------------------
 // Base branch
 
-fn branch_exists(repo: &Repository, name: &str) -> bool {
+pub(crate) fn branch_exists(repo: &Repository, name: &str) -> bool {
     repo.find_branch(name, BranchType::Local).is_ok()
         || repo.find_reference(&format!("refs/remotes/origin/{name}")).is_ok()
 }
@@ -368,7 +415,7 @@ pub fn resolve_base(repo: &Repository, override_: Option<&str>, shared: Option<&
 }
 
 /// Tip to measure "ahead of base" against: origin/<base>, else the local base.
-fn base_tip(repo: &Repository, base: &str) -> Option<Oid> {
+pub(crate) fn base_tip(repo: &Repository, base: &str) -> Option<Oid> {
     repo.find_reference(&format!("refs/remotes/origin/{base}"))
         .ok()
         .and_then(|r| r.target())
@@ -474,9 +521,53 @@ pub struct RepoStatus {
     /// "red" | "yellow" | "green" | "none"
     dot: &'static str,
     warning: Option<String>,
+    /// Where each feature's branch exists in this repo (only features that have it).
+    features: Vec<FeatureRef>,
 }
 
-fn in_progress(state: RepositoryState) -> Option<&'static str> {
+/// One feature branch in one repo, read from refs without checking anything out.
+#[derive(Serialize, Default, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureRef {
+    feature_id: String,
+    local: bool,
+    /// origin/<branch> exists.
+    remote: bool,
+    has_upstream: bool,
+    /// Commits not on the upstream (or, with no upstream, not on base).
+    unpushed: usize,
+    ahead_of_base: usize,
+}
+
+fn feature_refs(repo: &Repository, env: &SmartEnv, base: Option<&str>) -> Vec<FeatureRef> {
+    let base_tip = base.and_then(|b| base_tip(repo, b));
+    env.features
+        .iter()
+        .filter_map(|f| {
+            let local = repo.find_branch(&f.branch, BranchType::Local).ok();
+            let remote = repo.find_reference(&format!("refs/remotes/origin/{}", f.branch)).is_ok();
+            if local.is_none() && !remote {
+                return None;
+            }
+            let mut out = FeatureRef { feature_id: f.id.clone(), local: local.is_some(), remote, ..Default::default() };
+            if let Some(tip) = local.as_ref().and_then(|b| b.get().target()) {
+                if let Some(t) = base_tip {
+                    out.ahead_of_base = repo.graph_ahead_behind(tip, t).map(|(a, _)| a).unwrap_or(0);
+                }
+                match local.as_ref().and_then(|b| b.upstream().ok()).and_then(|u| u.get().target()) {
+                    Some(up) => {
+                        out.has_upstream = true;
+                        out.unpushed = repo.graph_ahead_behind(tip, up).map(|(a, _)| a).unwrap_or(0);
+                    }
+                    None => out.unpushed = out.ahead_of_base,
+                }
+            }
+            Some(out)
+        })
+        .collect()
+}
+
+pub(crate) fn in_progress(state: RepositoryState) -> Option<&'static str> {
     match state {
         RepositoryState::Clean => None,
         RepositoryState::Merge => Some("merge"),
@@ -506,15 +597,16 @@ fn repo_status(env: &SmartEnv, r: &SmartRepo) -> RepoStatus {
     };
 
     s.base_branch = resolve_base(&repo, r.base_branch.as_deref(), env.settings.shared_base.as_deref());
-    let feature_branch = env
-        .active_feature_id
-        .as_ref()
-        .and_then(|id| env.features.iter().find(|f| &f.id == id))
-        .filter(|f| f.repos.contains_key(&r.id))
-        .map(|f| f.branch.clone());
-    s.expected_branch = feature_branch.or_else(|| s.base_branch.clone());
     s.detached = repo.head_detached().unwrap_or(false);
     s.branch = head_branch(&repo).or_else(|| unborn_branch(&repo));
+    // Expected: the active feature's branch where it exists (or is checked out,
+    // which the next auto-branch pass adopts), else base.
+    let active = env.active_feature();
+    let feature_branch = active
+        .filter(|f| f.repos.contains_key(&r.id) || s.branch.as_deref() == Some(f.branch.as_str()))
+        .map(|f| f.branch.clone());
+    s.expected_branch = feature_branch.or_else(|| s.base_branch.clone());
+    s.features = feature_refs(&repo, env, s.base_branch.as_deref());
     s.in_progress = in_progress(repo.state());
 
     let mut opts = StatusOptions::new();
@@ -586,6 +678,13 @@ fn repo_status(env: &SmartEnv, r: &SmartRepo) -> RepoStatus {
             s.branch.as_deref().unwrap_or("?"),
             s.expected_branch.as_deref().unwrap_or("?")
         ))
+    } else if let Some(f) = active.filter(|f| s.branch.as_deref() == Some(f.branch.as_str()) && !s.has_upstream) {
+        // Auto-branch made a local branch from base while a teammate's branch of
+        // the same name exists on origin; their commits aren't in it.
+        s.features
+            .iter()
+            .any(|x| x.feature_id == f.id && x.remote)
+            .then(|| format!("origin/{} also exists. Merge it in after committing your changes.", f.branch))
     } else {
         None
     };
@@ -615,13 +714,17 @@ pub async fn sf_list_envs(store: State<'_, SmartStore>) -> CmdResult<EnvList> {
 }
 
 #[tauri::command]
-pub async fn sf_save_env(store: State<'_, SmartStore>, env: SmartEnv) -> CmdResult<SmartEnv> {
-    store.save(env)
+pub async fn sf_save_env(store: State<'_, SmartStore>, watcher: State<'_, SmartWatcher>, env: SmartEnv) -> CmdResult<SmartEnv> {
+    let saved = store.save(env)?;
+    watcher.resync();
+    Ok(saved)
 }
 
 #[tauri::command]
-pub async fn sf_delete_env(store: State<'_, SmartStore>, id: String) -> CmdResult<()> {
-    store.delete(&id)
+pub async fn sf_delete_env(store: State<'_, SmartStore>, watcher: State<'_, SmartWatcher>, id: String) -> CmdResult<()> {
+    store.delete(&id)?;
+    watcher.resync();
+    Ok(())
 }
 
 #[tauri::command]
@@ -653,7 +756,7 @@ pub async fn sf_status(store: State<'_, SmartStore>, env_id: String) -> CmdResul
         .envs
         .into_iter()
         .find(|env| env.id == env_id)
-        .ok_or_else(|| "That environment no longer exists.".to_string())?;
+        .ok_or_else(|| GONE.to_string())?;
     blocking(move || Ok(env_status(&env))).await
 }
 
@@ -684,25 +787,25 @@ pub mod bridge {
             .envs
             .into_iter()
             .find(|env| env.id == env_id)
-            .ok_or_else(|| "That environment no longer exists.".to_string())?;
+            .ok_or_else(|| GONE.to_string())?;
         Ok(env_status(&env))
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::process::Command;
 
     /// A fresh scratch directory under the system temp dir, removed on drop.
-    struct Scratch(PathBuf);
+    pub(crate) struct Scratch(pub(crate) PathBuf);
     impl Scratch {
-        fn new(tag: &str) -> Self {
+        pub(crate) fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!("gdt-smart-{tag}-{}", new_id("t")));
             std::fs::create_dir_all(&dir).unwrap();
             Scratch(std::fs::canonicalize(dir).unwrap())
         }
-        fn path(&self, rel: &str) -> PathBuf {
+        pub(crate) fn path(&self, rel: &str) -> PathBuf {
             self.0.join(rel)
         }
     }
@@ -712,7 +815,7 @@ mod tests {
         }
     }
 
-    fn git(dir: &Path, args: &[&str]) {
+    pub(crate) fn git(dir: &Path, args: &[&str]) {
         let out = Command::new("git")
             .current_dir(dir)
             .args(["-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
@@ -724,7 +827,7 @@ mod tests {
 
     /// A repo with one commit on `base`, cloned from a bare origin so it has
     /// origin/HEAD and an upstream.
-    fn repo_with_origin(s: &Scratch, name: &str, base: &str) -> PathBuf {
+    pub(crate) fn repo_with_origin(s: &Scratch, name: &str, base: &str) -> PathBuf {
         let bare = s.path(&format!("remotes/{name}.git"));
         let seed = s.path(&format!("seed/{name}"));
         std::fs::create_dir_all(&bare).unwrap();
@@ -740,7 +843,7 @@ mod tests {
         work
     }
 
-    fn env_with(name: &str, paths: &[&Path]) -> SmartEnv {
+    pub(crate) fn env_with(name: &str, paths: &[&Path]) -> SmartEnv {
         SmartEnv {
             version: 0,
             id: String::new(),

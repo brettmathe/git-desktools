@@ -227,7 +227,7 @@ pub struct NetGuard<'a> {
 }
 
 impl NetLocks {
-    fn try_lock(&self, key: &str) -> Option<NetGuard<'_>> {
+    pub(crate) fn try_lock(&self, key: &str) -> Option<NetGuard<'_>> {
         let mut set = self.0.lock().unwrap();
         if set.insert(key.to_string()) {
             Some(NetGuard { locks: self, key: key.to_string() })
@@ -243,7 +243,7 @@ impl Drop for NetGuard<'_> {
     }
 }
 
-const BUSY: &str = "Another fetch, pull or push is already running for this repository.";
+pub(crate) const BUSY: &str = "Another fetch, pull or push is already running for this repository.";
 
 // ---------------------------------------------------------------------------
 // Repository discovery
@@ -573,13 +573,13 @@ fn label_rank(l: &RefLabel) -> u8 {
     }
 }
 
-fn is_dirty(repo: &Repository) -> bool {
+pub(crate) fn is_dirty(repo: &Repository) -> bool {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true).recurse_untracked_dirs(false).exclude_submodules(true);
     repo.statuses(Some(&mut opts)).map(|s| !s.is_empty()).unwrap_or(false)
 }
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
@@ -1132,8 +1132,27 @@ pub async fn head_message(path: String) -> CmdResult<String> {
 }
 
 #[tauri::command]
-pub async fn commit(path: String, message: String, amend: bool) -> CmdResult<String> {
+pub async fn commit(
+    store: State<'_, crate::smart::SmartStore>,
+    path: String,
+    message: String,
+    amend: bool,
+) -> CmdResult<String> {
+    commit_impl(Some(store.inner().clone()), path, message, amend).await
+}
+
+/// `store`: refuse to commit on base while the repo's Smart Environment has an
+/// active feature (the frontend offers to move the changes first).
+pub async fn commit_impl(
+    store: Option<crate::smart::SmartStore>,
+    path: String,
+    message: String,
+    amend: bool,
+) -> CmdResult<String> {
     blocking(move || {
+        if let Some(guard) = store.as_ref().and_then(|s| crate::smart_features::commit_guard(s, &path)) {
+            return Err(crate::smart_features::guard_message(&guard));
+        }
         let mut a = args(["commit", "-F", "-"]);
         if amend {
             a.push("--amend".into());

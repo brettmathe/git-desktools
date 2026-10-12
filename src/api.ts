@@ -1,12 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AutoBranched,
+  BranchCheck,
   CommitDetail,
+  CommitGuard,
   FileContent,
   FileDiff,
   RepoCheck,
   RepoData,
   RepoInfo,
+  PushOutcome,
   RepoSummary,
   ScanHit,
   Settings,
@@ -57,7 +61,39 @@ export const api = {
     invoke<RepoCheck>("sf_validate_repo", { path, envId }),
   sfScanFolder: (path: string, envId: string | null) => invoke<ScanHit[]>("sf_scan_folder", { path, envId }),
   sfStatus: (envId: string) => invoke<SmartRepoStatus[]>("sf_status", { envId }),
+  sfCheckBranch: (envId: string, branch: string) => invoke<BranchCheck>("sf_check_branch", { envId, branch }),
+  sfStartFeature: (envId: string, name: string, branch: string, adopt: boolean) =>
+    invoke<{ env: SmartEnv; moved: AutoBranched[]; warnings: string[] }>("sf_start_feature", {
+      envId,
+      name,
+      branch,
+      adopt,
+    }),
+  sfBackToBase: (envId: string) => invoke<SmartEnv>("sf_back_to_base", { envId }),
+  sfMoveToFeature: (envId: string, repoId: string) =>
+    invoke<AutoBranched | null>("sf_move_to_feature", { envId, repoId }),
+  sfCommitGuard: (path: string) => invoke<CommitGuard | null>("sf_commit_guard", { path }),
+  sfCheckoutRemote: (envId: string, repoId: string) => invoke<SmartEnv>("sf_checkout_remote", { envId, repoId }),
+  sfRenameFeature: (envId: string, featureId: string, name: string) =>
+    invoke<SmartEnv>("sf_rename_feature", { envId, featureId, name }),
+  sfPushAll: (envId: string, featureId: string) => invoke<PushOutcome[]>("sf_push_all", { envId, featureId }),
 };
+
+/** Backend Smart Features events (see smart_watch.rs). */
+export function onSmartEvents(handlers: {
+  repoChanged: (p: { envId: string; repoId: string }) => void;
+  autoBranched: (p: AutoBranched) => void;
+  autoBranchFailed: (p: { envId: string; repoId: string; error: string }) => void;
+}): () => void {
+  const subs = [
+    listen<{ envId: string; repoId: string }>("sf-repo-changed", (e) => handlers.repoChanged(e.payload)),
+    listen<AutoBranched>("sf-auto-branched", (e) => handlers.autoBranched(e.payload)),
+    listen<{ envId: string; repoId: string; error: string }>("sf-auto-branch-failed", (e) =>
+      handlers.autoBranchFailed(e.payload),
+    ),
+  ];
+  return () => subs.forEach((s) => void s.then((un) => un()));
+}
 
 export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

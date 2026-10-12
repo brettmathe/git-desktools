@@ -5,7 +5,7 @@ Lightweight cross-platform git GUI (Tauri 2 + Rust + React/TypeScript).
 **Read `PLAN.md` first** — it has the full spec, decisions made with the user, current status,
 backend/frontend design, and verification steps. UI reference screenshots are in `docs/reference/` (local only, gitignored: they contain private repo data).
 
-- Package manager: pnpm. Dev: `pnpm tauri dev`. Typecheck: `pnpm typecheck`. Rust tests: `cd src-tauri && cargo test`.
+- Package manager: pnpm. Dev: `pnpm tauri dev`. Typecheck: `pnpm typecheck`. Frontend tests: `pnpm test`. Rust tests: `cd src-tauri && cargo test`.
 - Primary test repo (many branches): `~/wahoo/dex1/mfe/lobby-mfe` — read-only, never modify it.
 - Keep it simple: no PRs/issues/teams/AI features. Exception: **Smart Environments / Smart Features**
   (multi-repo feature branches with parked stashes) is approved; see the Smart Features section of `PLAN.md`.

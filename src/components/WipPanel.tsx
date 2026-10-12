@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent } from "react";
 import { api, errorText } from "../api";
-import type { FileChange, FileViewMode, OpenFile, WipStatus } from "../types";
+import type { CommitGuard, FileChange, FileViewMode, OpenFile, WipStatus } from "../types";
 import { plural } from "../util";
 import { showToast } from "../toast";
 import { FileList, ViewModeToggle } from "./FileList";
@@ -34,6 +34,8 @@ export function WipPanel(p: Props) {
   const { wip, draft, setDraft } = p;
   const [busy, setBusy] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
+  // Smart Features: this commit would land on base while a feature is active.
+  const [guard, setGuard] = useState<CommitGuard | null>(null);
   const [open, setOpen] = useState({ unstaged: true, staged: true });
   const total = new Set([...wip.unstaged, ...wip.staged].map((f) => f.path)).size;
 
@@ -83,14 +85,24 @@ export function WipPanel(p: Props) {
           ? "Amend Previous Commit"
           : `Commit Changes to ${plural(staged, "File")}`;
 
-  const doCommit = async () => {
+  const doCommit = async (moveTo?: CommitGuard) => {
     if (!canCommit) return;
     setBusy(true);
     setCommitError(null);
+    setGuard(null);
     const message = draft.description.trim()
       ? `${draft.summary.trim()}\n\n${draft.description.trim()}\n`
       : `${draft.summary.trim()}\n`;
     try {
+      if (moveTo) {
+        await api.sfMoveToFeature(moveTo.envId, moveTo.repoId);
+      } else {
+        const g = await api.sfCommitGuard(p.path).catch(() => null);
+        if (g) {
+          setGuard(g);
+          return;
+        }
+      }
       const sha = await api.commit(p.path, message, draft.amend);
       setDraft(() => emptyDraft);
       showToast(draft.amend ? "Amended the previous commit" : `Committed ${plural(staged, "file")}`, "success");
@@ -218,6 +230,22 @@ export function WipPanel(p: Props) {
           />
         </div>
         {commitError && <pre className="commit-error">{commitError}</pre>}
+        {guard && (
+          <div className="commit-guard">
+            <div>
+              <b>{guard.featureName}</b> is active in {guard.envName}, so this commit belongs on{" "}
+              <span className="mono">{guard.branch}</span>, not <span className="mono">{guard.base}</span>.
+            </div>
+            <div className="commit-guard-actions">
+              <button className="btn small" onClick={() => setGuard(null)}>
+                Cancel
+              </button>
+              <button className="btn small primary" onClick={() => void doCommit(guard)}>
+                Move to {guard.branch} and commit
+              </button>
+            </div>
+          </div>
+        )}
         <button className="commit-btn" disabled={!canCommit} onClick={() => void doCommit()} title="⌘/Ctrl + Enter">
           {label}
         </button>

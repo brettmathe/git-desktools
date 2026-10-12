@@ -222,6 +222,55 @@ export interface SmartRepoStatus {
   inProgress: string | null;
   dot: Dot;
   warning: string | null;
+  /** Where each feature's branch exists in this repo. */
+  features: FeatureRef[];
+}
+
+export interface FeatureRef {
+  featureId: string;
+  local: boolean;
+  /** origin/<branch> exists. */
+  remote: boolean;
+  hasUpstream: boolean;
+  /** Commits not on the upstream (or, with no upstream, not on base). */
+  unpushed: number;
+  aheadOfBase: number;
+}
+
+export interface BranchCheck {
+  error: string | null;
+  repos: {
+    repoId: string;
+    label: string;
+    local: boolean;
+    remote: boolean;
+    dirtyOnBase: boolean;
+    conflict: string | null;
+  }[];
+}
+
+export interface AutoBranched {
+  envId: string;
+  repoId: string;
+  label: string;
+  branch: string;
+  created: boolean;
+}
+
+export interface CommitGuard {
+  envId: string;
+  envName: string;
+  repoId: string;
+  featureName: string;
+  branch: string;
+  base: string;
+}
+
+export interface PushOutcome {
+  repoId: string;
+  label: string;
+  status: "pushed" | "skipped" | "failed";
+  detail: string;
 }
 
 export interface RepoCheck {

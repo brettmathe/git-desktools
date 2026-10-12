@@ -245,7 +245,7 @@ Make `app-icon.svg` (simple git-branch glyph on a rounded square) and run `pnpm 
 4. Screenshot the running app to compare against `docs/reference/` (use the `run` skill).
 5. Commit in logical chunks once it works (ask the user before the first commit).
 
-## Smart Features (approved; Phase 1 built)
+## Smart Features (approved; Phases 1–2 built)
 
 Approved by the user on 2026-10-11 as an exception to "keep it simple". The full plan lives in the
 user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
@@ -289,7 +289,44 @@ user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
   against throwaway repos (create via Add from folder + Add open tabs, dots for each state,
   one-environment-per-repo note, open repo tab from the panel, delete). The dev bridge stores
   environments under `GDT_BRIDGE_CONFIG_DIR` and answers folder pickers with `GDT_BRIDGE_PICK`.
-- Next: Phase 2 (start feature, watcher-driven auto-branch, commit guard, Push all).
+
+**Status (2026-10-11): Phase 2 is built and verified.**
+- `src-tauri/src/smart_features.rs`: `sf_check_branch` (git's `check-ref-format`, not a base or an
+  existing feature's branch, `a` vs `a/b` ref conflicts, where it exists locally/on origin, which
+  repos are dirty on base), `sf_start_feature` (creates no branches; `adopt` takes over an existing
+  branch and checks it out where it exists; repos already dirty on base move right away),
+  `sf_back_to_base`, `sf_move_to_feature`, `sf_commit_guard`, `sf_checkout_remote`,
+  `sf_rename_feature`, `sf_push_all` (`git push -u origin <b>:<b>` where there are unpushed
+  commits, 4 at a time, never forced; works for inactive features).
+- Auto-branch: when a repo is dirty **on its base** and its environment has an active feature,
+  `git switch --no-track -c <branch>` (or `git switch <branch>` if it already exists locally). It never
+  bases the branch on `origin/<branch>`; that repo shows a warning instead. A repo found on the
+  feature branch by hand is adopted into the feature. Feature operations share one lock
+  (`SmartStore::op_lock`).
+- `src-tauri/src/smart_watch.rs`: one `notify` watcher (FSEvents on macOS) over every environment
+  repo, 300 ms debounce (flushes at least every 2 s), ignores events where every path is gitignored,
+  plus a sweep every 10 s. Emits `sf-repo-changed`, `sf-auto-branched`, `sf-auto-branch-failed` (once
+  per distinct error). Resynced when environments are saved or deleted, and on every sweep.
+- Commit guard: `git::commit` refuses to commit on base while the repo's environment has an active
+  feature; the commit box shows "Move to <branch> and commit".
+- UI: active-feature bar per environment (name, branch, repo count, unpushed, Push all), "has
+  origin/<branch>: Check out" rows for a teammate's branch, a Features list for inactive features, menu
+  items New feature… / Push all / Rename feature… / Back to base, and `NewFeatureDialog` (live
+  validation via `src/branchName.ts`, adopt, "Pull base branches first"). Repo tabs refresh right away
+  when Smart Features changes a branch (`gdt-repos-changed` window event).
+- Phase 2 limits (Phase 3 removes them): **Back to base** and starting another feature refuse while the
+  active feature's repos have uncommitted changes (no parking yet); a feature that never touched a
+  repo is dropped when it's deactivated; there's no Switch or Finish yet, so a repo that a feature
+  used can't be removed from its environment.
+- Verified: `cargo test` (22 pass; Smart Features tests cover start, auto-branch keeping staged/
+  unstaged/untracked changes, name checks, adopt, commit guard, back to base, Push all, remote
+  checkout, and a real watcher test that edits a file and sees the branch appear); `pnpm test` runs
+  `src/branchName.test.ts`, which compares the regex with the installed git; and headless-Chrome runs
+  through the dev bridge (validation messages, start, auto-branch on an external edit, Push all, Back
+  to base, teammate branch Check out, commit guard). The bridge runs the watcher too
+  (`GDT_BRIDGE_NO_WATCH=1` turns it off) and refuses feature commands unless every repo of the
+  environment is under `GDT_BRIDGE_WRITE_ROOT`.
+- Next: Phase 3 (switching with parked stashes, journal + recovery, Finish).
 
 ## Phase 2 (not in v1 unless asked)
 Discard changes, partial (hunk/line) staging, checkout branch (double-click), pull with rebase/merge, stash UI (Smart Features stashes are separate, see above), commit search/filter, blame/history, split diff, syntax highlighting, watching `.git` with a filesystem watcher instead of focus polling, OS notifications when auto-fetch finds new commits.

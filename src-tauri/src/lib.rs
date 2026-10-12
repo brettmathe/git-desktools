@@ -3,6 +3,8 @@ mod graph;
 mod pty;
 mod settings;
 mod smart;
+mod smart_features;
+mod smart_watch;
 
 #[cfg(test)]
 mod dev_bridge;
@@ -63,7 +65,13 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             let dir = app.path().app_config_dir()?.join("smart-features");
-            app.manage(smart::SmartStore::new(dir));
+            let store = smart::SmartStore::new(dir);
+            let handle = app.handle().clone();
+            app.manage(smart_watch::spawn(store.clone(), move |event, payload| {
+                use tauri::Emitter;
+                let _ = handle.emit(event, payload);
+            }));
+            app.manage(store);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -98,6 +106,14 @@ pub fn run() {
             smart::sf_validate_repo,
             smart::sf_scan_folder,
             smart::sf_status,
+            smart_features::sf_check_branch,
+            smart_features::sf_start_feature,
+            smart_features::sf_back_to_base,
+            smart_features::sf_move_to_feature,
+            smart_features::sf_commit_guard,
+            smart_features::sf_checkout_remote,
+            smart_features::sf_rename_feature,
+            smart_features::sf_push_all,
         ])
         .run(tauri::generate_context!())
         .expect("error while running git-desktools");

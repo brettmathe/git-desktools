@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, errorText } from "../api";
 import { WIP_ID, type FileChange, type FileViewMode, type OpenFile, type RepoData, type WipStatus } from "../types";
-import { fileStats, plural, relativeTime } from "../util";
+import { fileStats, plural, relativeTime, REPOS_CHANGED } from "../util";
 import { showToast } from "../toast";
 import { CommitList, type ListHandle } from "./CommitList";
 import { CommitPanel } from "./CommitPanel";
@@ -117,11 +117,14 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
     void check();
     const onFocus = () => void check();
     window.addEventListener("focus", onFocus);
+    // Smart Features switched branches somewhere.
+    window.addEventListener(REPOS_CHANGED, onFocus);
     const id = window.setInterval(() => {
       if (document.visibilityState === "visible") void check();
     }, POLL_MS);
     return () => {
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener(REPOS_CHANGED, onFocus);
       window.clearInterval(id);
     };
   }, [active, check]);

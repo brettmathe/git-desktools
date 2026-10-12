@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errorText } from "../api";
+import { api, errorText, onSmartEvents } from "../api";
 import { showToast } from "../toast";
-import type { Dot, SmartEnv, SmartFeaturesUi, SmartRepoStatus } from "../types";
+import { notifyReposChanged } from "../util";
+import type { Dot, SmartEnv, SmartFeature, SmartFeaturesUi, SmartRepoStatus } from "../types";
 import { EnvironmentDialog } from "./EnvironmentDialog";
-import { BranchIcon, ChevronIcon, FetchIcon, MoreIcon, PlusIcon, RefreshIcon, WarningIcon } from "./icons";
+import { NewFeatureDialog } from "./NewFeatureDialog";
+import { BranchIcon, ChevronIcon, FetchIcon, MoreIcon, PlusIcon, PushIcon, RefreshIcon, WarningIcon } from "./icons";
 
 interface Props {
   ui: SmartFeaturesUi;
@@ -20,6 +22,20 @@ const isQuiet = (s: SmartRepoStatus) => s.dot === "green" && !s.warning;
 function worst(statuses: SmartRepoStatus[]): Dot {
   return statuses.reduce<Dot>((w, s) => (DOT_RANK[s.dot] > DOT_RANK[w] ? s.dot : w), "none");
 }
+
+/** A feature's footprint across the environment, from branch refs (no checkout). */
+function featureSummary(f: SmartFeature, st: SmartRepoStatus[] | undefined) {
+  const refs = (st ?? []).flatMap((s) => s.features.filter((x) => x.featureId === f.id).map((x) => ({ s, x })));
+  const local = refs.filter(({ x }) => x.local);
+  return {
+    repos: Object.keys(f.repos).length,
+    unpushed: local.reduce((n, { x }) => n + x.unpushed, 0),
+    /** Repos where only origin/<branch> exists (a teammate's work). */
+    remoteOnly: refs.filter(({ s, x }) => x.remote && !x.local && !(s.repoId in f.repos)).map(({ s }) => s),
+  };
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 function dotTitle(s: SmartRepoStatus): string {
   if (s.missing) return "Folder not found";
@@ -44,6 +60,9 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
   const [editing, setEditing] = useState<SmartEnv | "new" | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<SmartEnv | null>(null);
+  const [starting, setStarting] = useState<SmartEnv | null>(null);
+  const [renaming, setRenaming] = useState<{ env: SmartEnv; feature: SmartFeature; name: string } | null>(null);
+  const [working, setWorking] = useState<Set<string>>(new Set());
   const envsRef = useRef(envs);
   envsRef.current = envs;
 
@@ -103,6 +122,114 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
       window.clearInterval(t);
     };
   }, [refreshAll]);
+
+  // Backend watcher events: repos changing on disk, and repos moved onto the
+  // active feature's branch. Refreshes are coalesced per environment.
+  useEffect(() => {
+    const timers = new Map<string, number>();
+    const soon = (envId: string, reload = false) => {
+      window.clearTimeout(timers.get(envId));
+      timers.set(
+        envId,
+        window.setTimeout(() => {
+          timers.delete(envId);
+          if (reload) void loadEnvs().then(() => refreshEnv(envId));
+          else void refreshEnv(envId);
+        }, 400),
+      );
+    };
+    const off = onSmartEvents({
+      repoChanged: ({ envId }) => soon(envId),
+      autoBranched: (b) => {
+        if (b.created) showToast(`${b.label} moved to ${b.branch}`, "success");
+        notifyReposChanged();
+        soon(b.envId, true);
+      },
+      autoBranchFailed: ({ error }) => showToast(error, "error"),
+    });
+    return () => {
+      off();
+      timers.forEach((t) => window.clearTimeout(t));
+    };
+  }, [loadEnvs, refreshEnv]);
+
+  /** Run an environment-level action with a busy flag, then reload. */
+  const withEnv = async (env: SmartEnv, fn: () => Promise<void>) => {
+    setMenu(null);
+    setWorking((s) => new Set(s).add(env.id));
+    try {
+      await fn();
+    } catch (e) {
+      showToast(errorText(e), "error");
+    } finally {
+      setWorking((s) => {
+        const n = new Set(s);
+        n.delete(env.id);
+        return n;
+      });
+      notifyReposChanged();
+      await loadEnvs();
+      void refreshEnv(env.id);
+    }
+  };
+
+  const backToBase = (env: SmartEnv) =>
+    withEnv(env, async () => {
+      await api.sfBackToBase(env.id);
+      showToast(`${env.name} is back on base`, "success");
+    });
+
+  const pushAll = (env: SmartEnv, f: SmartFeature) =>
+    withEnv(env, async () => {
+      const out = await api.sfPushAll(env.id, f.id);
+      const pushed = out.filter((o) => o.status === "pushed");
+      const failed = out.filter((o) => o.status === "failed");
+      if (failed.length)
+        showToast(
+          `Push failed for ${failed.length} of ${out.length}:\n${failed.map((o) => `${o.label}: ${o.detail.split("\n").pop()}`).join("\n")}`,
+          "error",
+        );
+      else if (pushed.length) showToast(`Pushed ${f.branch} in ${pushed.map((o) => o.label).join(", ")}`, "success");
+      else showToast(`Nothing to push for ${f.name}`, "success");
+    });
+
+  const checkoutRemote = (env: SmartEnv, s: SmartRepoStatus, f: SmartFeature) =>
+    withEnv(env, async () => {
+      await api.sfCheckoutRemote(env.id, s.repoId);
+      showToast(`${s.label} is on ${f.branch} from origin`, "success");
+    });
+
+  const saveRename = async () => {
+    if (!renaming) return;
+    const { env, feature, name } = renaming;
+    setRenaming(null);
+    await withEnv(env, async () => {
+      await api.sfRenameFeature(env.id, feature.id, name);
+    });
+  };
+
+  /** After starting: optionally fast-forward every clean repo still on base. */
+  const pullBases = async (env: SmartEnv) => {
+    const st = await api.sfStatus(env.id);
+    const targets = st.filter((s) => s.branch && s.branch === s.baseBranch && s.hasUpstream && s.dot !== "red");
+    const failed: string[] = [];
+    const queue = [...targets];
+    const worker = async () => {
+      for (let s = queue.shift(); s; s = queue.shift()) {
+        try {
+          await api.pullRepo(s.path);
+        } catch (e) {
+          failed.push(`${s.label}: ${errorText(e).split("\n")[0]}`);
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    if (failed.length)
+      showToast(
+        `Couldn't pull ${failed.length} base ${failed.length === 1 ? "branch" : "branches"}:\n${failed.join("\n")}`,
+        "error",
+      );
+  };
 
   const toggleEnv = (id: string) => {
     const next = new Set(collapsed);
@@ -192,6 +319,92 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
     );
   };
 
+  const activeOf = (env: SmartEnv) => env.features.find((f) => f.id === env.activeFeatureId) ?? null;
+
+  const featureBar = (env: SmartEnv, st: SmartRepoStatus[] | undefined) => {
+    const f = activeOf(env);
+    const busy = working.has(env.id);
+    if (!f)
+      return (
+        <div className="sf-feature-bar none">
+          <span className="dim">No active feature</span>
+          <button className="btn small" onClick={() => setStarting(env)} disabled={busy}>
+            <PlusIcon size={11} /> Feature
+          </button>
+        </div>
+      );
+    const sum = featureSummary(f, st);
+    return (
+      <>
+        <div className="sf-feature-bar" title={`${f.name}\nbranch ${f.branch}`}>
+          <span className="sf-star">★</span>
+          <span className="sf-feature-name">{f.name}</span>
+          {f.name !== f.branch && <span className="sf-feature-branch">{f.branch}</span>}
+          <span className="dim small sf-feature-sum">
+            {sum.repos ? plural(sum.repos, "repo") : "no changes yet"}
+            {sum.unpushed > 0 && ` · ↑${sum.unpushed}`}
+          </span>
+          <button
+            className="icon-btn"
+            title={sum.unpushed ? `Push ${f.branch} in every repo with unpushed commits` : "Nothing to push"}
+            disabled={busy || sum.unpushed === 0}
+            onClick={() => void pushAll(env, f)}
+          >
+            <PushIcon size={13} className={busy ? "spin-slow" : undefined} />
+          </button>
+        </div>
+        {sum.remoteOnly.map((s) => (
+          <div key={s.repoId} className="sf-remote-only">
+            <span className="sf-repo-name">{s.label}</span>
+            <span className="dim small">has origin/{f.branch}</span>
+            <button
+              className="btn small"
+              disabled={busy || s.dot === "red" || s.branch !== s.baseBranch}
+              title={
+                s.dot === "red"
+                  ? "Commit or discard its changes first"
+                  : `Create a local ${f.branch} tracking origin/${f.branch}`
+              }
+              onClick={() => void checkoutRemote(env, s, f)}
+            >
+              Check out
+            </button>
+          </div>
+        ))}
+      </>
+    );
+  };
+
+  const otherFeatures = (env: SmartEnv, st: SmartRepoStatus[] | undefined) => {
+    const others = env.features.filter((f) => f.id !== env.activeFeatureId);
+    if (!others.length) return null;
+    return (
+      <div className="sf-features">
+        <div className="sf-features-head">Features</div>
+        {others.map((f) => {
+          const sum = featureSummary(f, st);
+          return (
+            <div key={f.id} className="sf-feature-row" title={`branch ${f.branch}`}>
+              <span className="sf-feature-name">{f.name}</span>
+              <span className="dim small sf-feature-sum">
+                {plural(sum.repos, "repo")}
+                {sum.unpushed > 0 && ` · ↑${sum.unpushed}`}
+              </span>
+              <button
+                className="icon-btn"
+                title={sum.unpushed ? `Push ${f.branch}` : "Nothing to push"}
+                disabled={working.has(env.id) || sum.unpushed === 0}
+                onClick={() => void pushAll(env, f)}
+              >
+                <PushIcon size={12} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const envBlock = (env: SmartEnv) => {
     const open = !collapsed.has(env.id);
     const st = statuses[env.id];
@@ -231,6 +444,30 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
                 <button
                   onClick={() => {
                     setMenu(null);
+                    setStarting(env);
+                  }}
+                >
+                  New feature…
+                </button>
+                {activeOf(env) && (
+                  <>
+                    <button onClick={() => void pushAll(env, activeOf(env)!)}>Push all</button>
+                    <button
+                      onClick={() => {
+                        setMenu(null);
+                        const f = activeOf(env)!;
+                        setRenaming({ env, feature: f, name: f.name });
+                      }}
+                    >
+                      Rename feature…
+                    </button>
+                    <button onClick={() => void backToBase(env)}>Back to base</button>
+                  </>
+                )}
+                <div className="sf-menu-sep" />
+                <button
+                  onClick={() => {
+                    setMenu(null);
                     setEditing(env);
                   }}
                 >
@@ -252,6 +489,7 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
         </div>
         {open && (
           <div className="sf-env-body">
+            {featureBar(env, st)}
             {!st && loading.has(env.id) && <div className="sf-empty">Reading status…</div>}
             {st && st.length === 0 && (
               <div className="sf-empty">
@@ -280,6 +518,7 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
                 {clean.length} clean {clean.length === 1 ? "repo" : "repos"}
               </button>
             )}
+            {otherFeatures(env, st)}
           </div>
         )}
       </div>
@@ -336,6 +575,51 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
             void loadEnvs().then(() => refreshEnv(saved.id));
           }}
         />
+      )}
+      {starting && (
+        <NewFeatureDialog
+          env={starting}
+          onClose={() => setStarting(null)}
+          onStarted={(res, pull) => {
+            const env = starting;
+            setStarting(null);
+            const f = res.env.features.find((x) => x.id === res.env.activeFeatureId);
+            showToast(
+              res.moved.length
+                ? `Started ${f?.name}. Moved ${res.moved.map((m) => m.label).join(", ")} to ${f?.branch}.`
+                : `Started ${f?.name}. Repos join it as their files change.`,
+              "success",
+            );
+            for (const w of res.warnings) showToast(w, "error");
+            void withEnv(env, async () => {
+              if (pull) await pullBases(env);
+            });
+          }}
+        />
+      )}
+      {renaming && (
+        <div className="modal-backdrop" onMouseDown={() => setRenaming(null)}>
+          <div className="modal sf-confirm" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modal-title">Rename feature</div>
+            <label className="field">
+              <span>Display name (the branch stays {renaming.feature.branch})</span>
+              <input
+                autoFocus
+                value={renaming.name}
+                onChange={(e) => setRenaming({ ...renaming, name: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && void saveRename()}
+              />
+            </label>
+            <div className="popover-actions">
+              <button className="btn" onClick={() => setRenaming(null)}>
+                Cancel
+              </button>
+              <button className="btn primary" disabled={!renaming.name.trim()} onClick={() => void saveRename()}>
+                Rename
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {deleting && (
         <div className="modal-backdrop" onMouseDown={() => setDeleting(null)}>
