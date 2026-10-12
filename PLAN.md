@@ -263,7 +263,7 @@ user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
   holds `environments.json` + one `env-<id>.json` per environment (Rust-owned schema, atomic writes).
   `settings.json` keeps only panel UI state.
 - **Phases**: 1 environments + read-only status panel; 2 features + auto-branch; 3 switching + finish;
-  4 polish (export/import, update from base).
+  4 polish (see **Phase 4 checklist** below).
 
 **Status (2026-10-11, branch `feat/smart-features`):** Phase 1 is built and verified.
 - Backend `src-tauri/src/smart.rs`: `SmartStore` (one `env-<id>.json` per environment plus an
@@ -361,9 +361,7 @@ user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
   headless-Chrome run through the dev bridge did: start a second feature (parks the first), switch
   back with everything restored, a blocked preflight (`index.lock`), a switch failed mid-way by a
   `reference-transaction` hook → banner → Retry, and Finish requiring ticks.
-- Not done (Phase 4): reconciling orphan pins (a pin whose feature is gone), **Locate…** for moved
-  repos, export/import, Update from base, Move commits to feature, Launchpad section, and a warning about
-  open terminals in affected repos.
+- Not done: see the **Phase 4 checklist** below.
 
 **Claude Code skill: `smart-environment` (2026-10-11).** The app ships a Claude Code plugin in
 `src-tauri/claude-plugin/` (bundled as resources; in dev it's read from the source folder). Terminals
@@ -386,7 +384,39 @@ environment before adding it to the new one, so a crash leaves it in neither, ne
 keeps its id, label and base override. Both skills share `claude-plugin/scripts/smart_env.py` and
 take the same `flock` as the app.
 
-- Next: Phase 4 (polish) when asked, then a manual run with the real RGT repos.
+### Phase 4 checklist (polish; not started)
+
+Build when asked. Suggested order: use Smart Features on RGT/dex1 first, then 2, 3 and 6.
+
+From the original plan:
+- [ ] 1. **Export / import environments**: save an environment's definition (repos + settings, no
+  feature state) to a file; import it on another machine or for a teammate, remapping paths.
+- [ ] 2. **Update from base**: show `base ↓N` on a feature when `origin/<base>` has moved on; per
+  repo, merge `origin/<base>` into the feature branch (confirmed; stops on conflicts).
+- [ ] 3. **Move commits to feature**: when a commit lands on base while a feature is active (e.g.
+  `git commit` in a terminal), the repo goes ⚠ with this action: create/advance the feature branch to
+  that commit, then `git branch -f <base> origin/<base>` while on the feature branch, so the working
+  tree is untouched. Always confirmed.
+- [ ] 4. **Launchpad section**: Smart Environments on the start screen for quick access.
+
+Found while building Phases 1–3:
+- [ ] 5. **Orphan pins**: find `refs/smart-features/<id>/stash` whose feature no longer exists (e.g.
+  the env file was lost) and offer **Restore as feature** or **Drop**.
+- [ ] 6. **Locate…**: for a repo whose folder is missing, re-point its path (features reference repos
+  by id, so only `path` changes) instead of remove + re-add.
+- [ ] 7. **Terminal warning**: the switch dialog warns when git-desktools has terminals open in repos
+  the switch will change.
+- [ ] 8. **Background auto-fetch for environment repos** without an open tab (today only **Fetch
+  all**), with the existing back-off and network locks.
+- [ ] 9. **Pull bases (ff-only)** as an environment ⋯ menu action (today only a checkbox when starting
+  a feature).
+
+Edge cases:
+- [ ] 10. **Submodules**: `git switch --recurse-submodules` for repos that have them.
+- [ ] 11. **Git LFS**: warn when a repo uses LFS but `git lfs` isn't installed; show smudge time in the
+  switch progress.
+
+- Next: a manual run with the real RGT repos, then Phase 4 items when asked.
 
 ## Phase 2 (not in v1 unless asked)
 Partial (hunk/line) staging, checkout branch (double-click), pull with rebase/merge, stash UI (Smart Features stashes are separate, see above), commit search/filter, blame/history, split diff, syntax highlighting, watching `.git` with a filesystem watcher instead of focus polling, OS notifications when auto-fetch finds new commits.
