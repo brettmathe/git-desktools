@@ -248,7 +248,7 @@ Make `app-icon.svg` (simple git-branch glyph on a rounded square) and run `pnpm 
 ## Smart Features (approved; Phases 1–3 built)
 
 Approved by the user on 2026-10-11 as an exception to "keep it simple". The full plan lives in the
-user's workspace task `brett-work/inbox/2026-10-10-dex-worktrees.md`. Summary:
+user's workspace task `~/personal/brett-work/completed/2026-10-10-dex-worktrees.md`. Summary:
 
 - **Smart Environment**: a user-defined set of local repos from anywhere on disk (e.g. the dex repos,
   or the RGT server repos + game client). A repo belongs to only one environment. Not tied to dex or dexman.
@@ -386,7 +386,8 @@ take the same `flock` as the app.
 
 ### Phase 4 checklist (polish; not started)
 
-Build when asked. Suggested order: use Smart Features on RGT/dex1 first, then 2, 3 and 6.
+Tracked as a reminder in the user's workspace task
+`~/personal/brett-work/inbox/2026-10-11-smart-features-phase-4.md`. Build when asked. Suggested order: use Smart Features on RGT/dex1 first, then 2, 3 and 6.
 
 From the original plan:
 - [ ] 1. **Export / import environments**: save an environment's definition (repos + settings, no
