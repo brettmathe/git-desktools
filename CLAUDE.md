@@ -11,6 +11,31 @@ backend/frontend design, and verification steps. UI reference screenshots are in
   (multi-repo feature branches with parked stashes) is approved; see the Smart Features section of `PLAN.md`.
 - Update the Status section of `PLAN.md` as work lands.
 
+## Publishing a new version
+
+Full steps and troubleshooting are in the README ("Publishing a new version"). In short, from a clean,
+up-to-date `main` with the release's work merged:
+
+```sh
+node scripts/bump-version.mjs <x.y.z>     # package.json, tauri.conf.json, Cargo.toml, Cargo.lock
+pnpm version:check
+git commit -am "Release v<x.y.z>"
+git tag v<x.y.z> && git push origin main v<x.y.z>
+```
+
+The tag triggers `.github/workflows/release.yml` (tests, universal macOS build, GitHub Release with
+`.dmg`, signed `.app.tar.gz` + `.sig`, and `latest.json`, which installed apps poll). Watch it with
+`gh run watch`, then confirm the four assets and that `releases/latest/download/latest.json` shows the
+new version.
+
+- Confirm with the user before pushing a release commit or tag: publishing ships to every install.
+- Tag only after the work is merged to `main`; the tag must equal `tauri.conf.json`'s version or CI
+  refuses it. Never reuse a published version; to retry a failed run, delete and re-push the tag.
+- Signing key: `~/.tauri/git-desktools.key` (+ `.password`), mirrored in the repo secrets
+  `TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`. Never commit or print it.
+- Keep `tauri-plugin-updater` (crate) and `@tauri-apps/plugin-updater` (npm) on the same minor; the
+  CLI refuses a mismatch. Don't bypass pnpm's `minimumReleaseAge` (no `pnpm-workspace.yaml` exclusions).
+
 ## Driving the UI in tests
 
 The native window can't be screenshotted from this terminal (no Screen Recording permission), so UI
