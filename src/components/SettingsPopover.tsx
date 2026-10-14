@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { showToast } from "../toast";
 import type { Settings } from "../types";
+import { checkForUpdate, installUpdate, restartApp, useUpdater } from "../updater";
 
 interface Props {
   settings: Settings;
@@ -39,7 +41,43 @@ export function SettingsPopover({ settings, onChange, onClose }: Props) {
           <span>seconds</span>
         </label>
         <p className="dim small">Background fetches never pull or change your working tree.</p>
+        <UpdatesSection />
       </div>
     </>
+  );
+}
+
+function UpdatesSection() {
+  const u = useUpdater();
+  const manualCheck = async () => {
+    if ((await checkForUpdate()) === "uptodate") showToast("git-desktools is up to date.", "success");
+  };
+  return (
+    <div className="settings-section">
+      <div className="popover-title">Updates</div>
+      <div className="update-row">
+        <span className="dim">Version {u.currentVersion ?? "…"}</span>
+        {u.status === "available" ? (
+          <button className="btn small primary" onClick={() => void installUpdate()}>
+            Install {u.version}
+          </button>
+        ) : u.status === "downloading" ? (
+          <button className="btn small" disabled>
+            {u.progress === null ? "Downloading…" : `Downloading ${Math.round(u.progress * 100)}%`}
+          </button>
+        ) : u.status === "ready" ? (
+          <button className="btn small primary" onClick={() => void restartApp()}>
+            Restart to finish
+          </button>
+        ) : (
+          <button className="btn small" onClick={() => void manualCheck()} disabled={u.status === "checking"}>
+            {u.status === "checking" ? "Checking…" : "Check for updates"}
+          </button>
+        )}
+      </div>
+      {u.status === "error" && u.error && <p className="error-text small">{u.error}</p>}
+      {u.status === "available" && u.notes && <p className="dim small">{u.notes}</p>}
+      <p className="dim small">Checked on launch and every few hours. Updates are signed; unsigned builds are refused.</p>
+    </div>
   );
 }

@@ -24,3 +24,9 @@ notify = "8"
 
 [profile.dev.package."*"]
 opt-level = 2
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# The updater replaces the app bundle on disk, so it is desktop-only; `process`
+# provides the relaunch that has to follow an install.
+tauri-plugin-process = "2"
+tauri-plugin-updater = "~2.13"

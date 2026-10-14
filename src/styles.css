@@ -402,6 +402,27 @@ button.plain {
 .tab-gear {
   margin: auto 10px;
 }
+.update-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: auto 0 auto 8px;
+  padding: 2px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 11px;
+  background: var(--accent-soft);
+  color: var(--text-bright);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.update-pill:hover {
+  background: var(--accent);
+}
+.update-pill.busy {
+  cursor: default;
+  background: var(--accent-soft);
+}
 
 .tab-content {
   flex: 1;
@@ -452,6 +473,21 @@ button.plain {
   right: 10px;
   top: 44px;
   position: fixed;
+}
+.settings-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+.update-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.error-text {
+  color: var(--red);
+  word-break: break-word;
 }
 .field {
   display: flex;

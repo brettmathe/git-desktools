@@ -8,10 +8,12 @@ import { SmartFeaturesPanel } from "./components/SmartFeaturesPanel";
 import { TabBar, type Tab } from "./components/TabBar";
 import { showToast, Toaster } from "./toast";
 import type { RepoInfo, Settings, SmartFeaturesUi } from "./types";
+import { checkForUpdate, checkForUpdateIfStale, loadCurrentVersion } from "./updater";
 
 const DEFAULT_SETTINGS: Settings = { recent: [], openTabs: [], activeTab: null, autoFetchSeconds: 60 };
 const DEFAULT_SF_UI: SmartFeaturesUi = { panelOpen: false, width: 300, collapsed: [], changedOnly: false };
 const MAX_RECENT = 30;
+const HOUR = 60 * 60 * 1000;
 
 let tabCounter = 0;
 const newId = () => `tab-${++tabCounter}`;
@@ -69,6 +71,21 @@ export default function App() {
       setActiveId(active.id);
       setSettings(s);
     })();
+  }, []);
+
+  // Check for an app update on launch, then while the app stays open: at most every
+  // 6 hours on a timer, or after an hour away when the window regains focus. The
+  // hourly tick (rather than a 6-hour timer) catches up promptly after the Mac sleeps.
+  useEffect(() => {
+    void loadCurrentVersion();
+    void checkForUpdate(true);
+    const timer = setInterval(() => void checkForUpdateIfStale(6 * HOUR), HOUR);
+    const onFocus = () => void checkForUpdateIfStale(HOUR);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
 
   // Persist open tabs.
