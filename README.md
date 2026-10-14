@@ -38,19 +38,66 @@ xattr -dr com.apple.quarantine /Applications/git-desktools.app
 This applies to the first install only. After that, updates are signed with the app's own minisign key
 and install from the update pill in the tab bar (or Settings → Updates) without prompting.
 
-## Release
+## Publishing a new version
 
-```sh
-node scripts/bump-version.mjs 0.2.0   # package.json, tauri.conf.json, Cargo.toml, Cargo.lock
-git commit -am "Release v0.2.0"
-git tag v0.2.0 && git push origin main v0.2.0
-```
+Releases are built by GitHub Actions when a `v*` tag is pushed. Installed apps poll
+`releases/latest/download/latest.json` and offer the update in the tab bar.
 
-The tag runs `.github/workflows/release.yml`: tests, a universal macOS build, and a GitHub Release with
-the `.dmg`, the signed `.app.tar.gz` and `latest.json`, which installed apps poll. The workflow needs
-the repo secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The private key
-lives outside the repo (`~/.tauri/git-desktools.key`); lose it and installed apps can no longer verify
-updates, so keep a backup.
+1. Start from an up-to-date, clean `main` with everything for the release merged:
+
+   ```sh
+   git checkout main && git pull --ff-only && git status
+   ```
+
+2. Bump the version (semver, higher than the last release). This sets `package.json`,
+   `src-tauri/tauri.conf.json` (the version the updater compares), `src-tauri/Cargo.toml` and
+   `src-tauri/Cargo.lock`:
+
+   ```sh
+   node scripts/bump-version.mjs 0.2.0
+   pnpm version:check                      # all four sites agree
+   ```
+
+3. Commit, tag and push both:
+
+   ```sh
+   git commit -am "Release v0.2.0"
+   git tag v0.2.0
+   git push origin main v0.2.0
+   ```
+
+4. Watch the build (about 10–20 minutes):
+
+   ```sh
+   gh run watch -R brettmathe/git-desktools $(gh run list -R brettmathe/git-desktools --workflow release.yml -L 1 --json databaseId --jq '.[0].databaseId')
+   ```
+
+   It runs the typecheck and tests, builds a universal macOS app, and publishes a GitHub Release.
+
+5. Check the release has `git-desktools_<ver>_universal.dmg`, `…app.tar.gz`, `…app.tar.gz.sig` and
+   `latest.json`, and that the manifest advertises the new version:
+
+   ```sh
+   gh release view v0.2.0 -R brettmathe/git-desktools
+   curl -sL https://github.com/brettmathe/git-desktools/releases/latest/download/latest.json | head -c 300
+   ```
+
+Installed apps pick it up on their next check (launch, every few hours, or Settings → Check for
+updates).
+
+**If it goes wrong**
+
+- *Tag doesn't match the version*: the workflow refuses to build. Delete the tag
+  (`git tag -d v0.2.0 && git push origin :refs/tags/v0.2.0`), fix the version, and tag again.
+- *Build or tests fail*: nothing is published. Fix on `main`, delete the tag as above, re-tag the
+  fixed commit and push the tag again. Never re-use a version number that was already published.
+- *Push of `.github/workflows/*` rejected*: the GitHub token needs the `workflow` scope.
+
+**Prerequisites (one-time, already done)**: repo secrets `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, from `~/.tauri/git-desktools.key` and
+`~/.tauri/git-desktools.key.password`. That key signs every update and its public half is built into
+the app: lose it and installed copies can no longer accept updates, so keep a backup and never commit
+it. Local `pnpm tauri build` needs the same two values as environment variables.
 
 ## Develop
 
