@@ -59,8 +59,15 @@ pub fn run() {
     #[cfg(not(windows))]
     inherit_login_path();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+
+    // The updater replaces the app bundle on disk; `process` provides the relaunch after it.
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    builder
         .manage(pty::PtyState::default())
         .manage(git::NetLocks::default())
         .setup(|app| {

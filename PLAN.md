@@ -55,6 +55,17 @@ Verified with automated UI runs (headless Chrome + dev bridge, see CLAUDE.md) ag
 Not verified automatically (needs a human in the native window): the xterm.js terminal panel UI with a
 live `claude` session, native folder pickers (Browse/Init), macOS title-bar drag region, back-off timing.
 
+**Self-update** (2026-10-14): `tauri-plugin-updater` + `tauri-plugin-process`, same design as Deskwork.
+Releases are tag-triggered (`.github/workflows/release.yml`, universal macOS `.dmg` + signed
+`.app.tar.gz` + `latest.json` on this repo's GitHub Releases); the endpoint is
+`releases/latest/download/latest.json`. `src/updater.ts` checks silently on launch, hourly if the last
+check is over 6 h old, and on window focus after 1 h; an update pill appears in the tab bar
+(Install → progress → Restart), and Settings has Updates (version + Check for updates). Versions are
+kept in step by `scripts/bump-version.mjs` (CI runs `--check` and refuses a tag that disagrees).
+Verified: signed local `tauri build` produces the `.app.tar.gz` + `.sig`; Settings section in headless
+Chrome (silent launch check under the dev bridge). Not yet verified: an end-to-end update from a
+published release.
+
 Graph lane rule (refined during testing): a commit's first parent folds into an existing lane only when
 that lane is to its left; otherwise it continues straight down. Keeps main history in column 0 and the
 graph narrow (lobby-mfe: 6 lanes).

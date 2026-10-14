@@ -153,6 +153,11 @@ export const RenameIcon = (p: P) => (
     <path d="M4 12h14M13 7l5 5-5 5" />
   </Svg>
 );
+export const DownloadIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
+  </Svg>
+);
 export const GearIcon = (p: P) => (
   <Svg {...p}>
     <circle cx="12" cy="12" r="3" />

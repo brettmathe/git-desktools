@@ -41,6 +41,18 @@
       "claude-plugin/scripts/smart_env.py": "claude-plugin/scripts/smart_env.py",
       "claude-plugin/skills/smart-environment/SKILL.md": "claude-plugin/skills/smart-environment/SKILL.md",
       "claude-plugin/skills/smart-environment-add-repo/SKILL.md": "claude-plugin/skills/smart-environment-add-repo/SKILL.md"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQzNkJENkVCNDU1NEI1MzcKUldRM3RWUkY2OVpyMCttOVFIbDIwa3JWMXp4WHZMVFN4S0h5MUFDaXErU05mSjVHcVJvTS9uOSsK",
+      "endpoints": [
+        "https://github.com/brettmathe/git-desktools/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

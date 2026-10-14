@@ -1,5 +1,6 @@
+import { installUpdate, restartApp, useUpdater } from "../updater";
 import { isMac } from "../util";
-import { BranchIcon, GearIcon, LayersIcon, PlusIcon, RocketIcon, XIcon } from "./icons";
+import { BranchIcon, DownloadIcon, GearIcon, LayersIcon, PlusIcon, RocketIcon, XIcon } from "./icons";
 
 export type Tab = { id: string; kind: "launchpad" } | { id: string; kind: "repo"; path: string; name: string };
 
@@ -48,9 +49,38 @@ export function TabBar({ tabs, activeId, onActivate, onClose, onNew, onSettings,
         <PlusIcon size={15} />
       </button>
       <div className="tab-fill" data-tauri-drag-region />
+      <UpdatePill />
       <button className="icon-btn tab-gear" onClick={onSettings} title="Settings">
         <GearIcon size={16} />
       </button>
     </div>
   );
+}
+
+/** Shown only once an update is on offer: Install → progress → Restart. */
+function UpdatePill() {
+  const u = useUpdater();
+  if (u.status === "available") {
+    return (
+      <button className="update-pill" onClick={() => void installUpdate()} title={u.notes ?? undefined}>
+        <DownloadIcon size={13} /> Update to {u.version}
+      </button>
+    );
+  }
+  if (u.status === "downloading") {
+    const pct = u.progress === null ? null : Math.round(u.progress * 100);
+    return (
+      <span className="update-pill busy">
+        <DownloadIcon size={13} /> {pct === null ? "Downloading…" : `Downloading ${pct}%`}
+      </span>
+    );
+  }
+  if (u.status === "ready") {
+    return (
+      <button className="update-pill" onClick={() => void restartApp()}>
+        Restart to update
+      </button>
+    );
+  }
+  return null;
 }
