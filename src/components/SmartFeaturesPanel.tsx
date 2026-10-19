@@ -7,7 +7,7 @@ import { EnvironmentDialog } from "./EnvironmentDialog";
 import { FinishFeatureDialog } from "./FinishFeatureDialog";
 import { NewFeatureDialog } from "./NewFeatureDialog";
 import { SwitchFeatureDialog } from "./SwitchFeatureDialog";
-import { BranchIcon, ChevronIcon, FetchIcon, MoreIcon, PlusIcon, PushIcon, RefreshIcon, WarningIcon } from "./icons";
+import { BranchIcon, ChevronIcon, FetchIcon, MoreIcon, PlusIcon, PullIcon, PushIcon, RefreshIcon, WarningIcon } from "./icons";
 
 interface Props {
   ui: SmartFeaturesUi;
@@ -61,6 +61,7 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
   const [statuses, setStatuses] = useState<Record<string, SmartRepoStatus[]>>({});
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [fetching, setFetching] = useState<Set<string>>(new Set());
+  const [pulling, setPulling] = useState<Set<string>>(new Set());
   const [showClean, setShowClean] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<SmartEnv | "new" | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
@@ -335,6 +336,52 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
     void refreshEnv(env.id);
   };
 
+  /** Fast-forward every repo on a branch with an upstream; the rest are skipped, not failed. */
+  const pullAll = async (env: SmartEnv) => {
+    setMenu(null);
+    setPulling((s) => new Set(s).add(env.id));
+    const failed: string[] = [];
+    let pulled = 0;
+    let commits = 0;
+    let targets: SmartRepoStatus[] = [];
+    try {
+      const st = await api.sfStatus(env.id);
+      targets = st.filter((s) => !s.missing && s.branch && s.hasUpstream);
+      const queue = [...targets];
+      const worker = async () => {
+        for (let s = queue.shift(); s; s = queue.shift()) {
+          try {
+            const r = await api.pullRepo(s.path);
+            pulled++;
+            commits += r.count;
+          } catch (e) {
+            failed.push(`${s.label}: ${errorText(e).split("\n")[0]}`);
+          }
+        }
+      };
+      await Promise.all([worker(), worker(), worker(), worker()]);
+    } catch (e) {
+      failed.push(errorText(e));
+    }
+    setPulling((s) => {
+      const n = new Set(s);
+      n.delete(env.id);
+      return n;
+    });
+    const skipped = env.repos.length - targets.length;
+    const skipNote = skipped ? ` (skipped ${plural(skipped, "repository", "repositories")} with no upstream)` : "";
+    if (failed.length)
+      showToast(`Pull failed for ${failed.length} of ${targets.length}:\n${failed.join("\n")}`, "error");
+    else if (!targets.length) showToast(`Nothing to pull in ${env.name}${skipNote}`, "success");
+    else
+      showToast(
+        `${commits ? `Pulled ${plural(commits, "commit")} into` : "Up to date:"} ${plural(pulled, "repository", "repositories")} in ${env.name}${skipNote}`,
+        "success",
+      );
+    notifyReposChanged();
+    void refreshEnv(env.id);
+  };
+
   const confirmDelete = async () => {
     if (!deleting) return;
     try {
@@ -559,6 +606,14 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
           >
             <FetchIcon size={13} className={fetching.has(env.id) ? "spin-slow" : undefined} />
           </button>
+          <button
+            className="icon-btn"
+            title="Pull all repositories (fast-forward only)"
+            disabled={pulling.has(env.id)}
+            onClick={() => void pullAll(env)}
+          >
+            <PullIcon size={13} className={pulling.has(env.id) ? "pulse" : undefined} />
+          </button>
           <button className="icon-btn" title="More" onClick={() => setMenu(menu === env.id ? null : env.id)}>
             <MoreIcon size={14} />
           </button>
@@ -608,6 +663,7 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
                   Edit environment…
                 </button>
                 <button onClick={() => void fetchAll(env)}>Fetch all</button>
+                <button onClick={() => void pullAll(env)}>Pull all</button>
                 <button
                   className="danger"
                   onClick={() => {
