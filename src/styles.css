@@ -1918,6 +1918,9 @@ button.plain {
 .spin-slow {
   animation: sf-spin 1.2s linear infinite;
 }
+.pulse {
+  animation: pulse 1s ease-in-out infinite;
+}
 @keyframes sf-spin {
   to {
     transform: rotate(360deg);

@@ -289,7 +289,7 @@ user's workspace task `~/personal/brett-work/completed/2026-10-10-dex-worktrees.
   or ahead of base with no upstream; green otherwise. Amber warning for merge/rebase in progress,
   detached HEAD, no base branch, or not on the expected branch.
 - UI: `SmartFeaturesPanel` (left, resizable, toggled by the layers icon in the tab bar; clean repos
-  collapse into "N clean"; Changed only filter; Fetch all; Edit/Delete) and `EnvironmentDialog`
+  collapse into "N clean"; Changed only filter; Fetch all; Pull all (fast-forward only, skips repos with no upstream); Edit/Delete) and `EnvironmentDialog`
   (Add repo…, Add from folder… with a checklist, Add open tabs, labels, base overrides, shared base).
   Panel UI state lives in `settings.json` as `smartFeatures`.
 - Deviations from the plan: which environment holds a repo is derived from the env files rather than
