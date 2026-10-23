@@ -17,12 +17,14 @@ import {
 interface Props {
   data: RepoData;
   onJump: (oid: string) => void;
+  /** Double-click: switch to `branch`, creating it from `track` when there's no local one. */
+  onCheckout: (branch: string, track: string | null) => void;
   onCollapse: () => void;
 }
 
 type SectionKey = "local" | "remote" | "tags";
 
-export function Sidebar({ data, onJump, onCollapse }: Props) {
+export function Sidebar({ data, onJump, onCheckout, onCollapse }: Props) {
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<Record<SectionKey, boolean>>({ local: true, remote: true, tags: false });
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -55,7 +57,11 @@ export function Sidebar({ data, onJump, onCollapse }: Props) {
     });
   const isOpen = (key: string) => filtering || !collapsed.has(key);
 
-  const renderTree = (nodes: TreeNode<{ target: string; fullName: string }>[], depth: number, prefix: string): ReactNode =>
+  const renderTree = (
+    nodes: TreeNode<{ target: string; fullName: string; name: string }>[],
+    depth: number,
+    prefix: string,
+  ): ReactNode =>
     nodes.map((n) =>
       n.item ? (
         <div
@@ -63,7 +69,8 @@ export function Sidebar({ data, onJump, onCollapse }: Props) {
           className="sb-row"
           style={{ paddingLeft: 12 + depth * 14 }}
           onClick={() => onJump(n.item!.target)}
-          title={n.item.fullName}
+          onDoubleClick={() => n.item!.name !== "HEAD" && onCheckout(n.item!.name, n.item!.fullName)}
+          title={`${n.item.fullName}\nDouble-click to check out`}
         >
           <BranchIcon size={13} className="dim" />
           <span className="sb-name">{n.name}</span>
@@ -119,7 +126,8 @@ export function Sidebar({ data, onJump, onCollapse }: Props) {
                 key={b.name}
                 className={`sb-row${b.isHead ? " head" : ""}`}
                 onClick={() => onJump(b.target)}
-                title={b.upstream ? `${b.name} → ${b.upstream}` : b.name}
+                onDoubleClick={() => !b.isHead && onCheckout(b.name, null)}
+                title={`${b.upstream ? `${b.name} → ${b.upstream}` : b.name}${b.isHead ? "" : "\nDouble-click to check out"}`}
               >
                 {b.isHead ? (
                   <span className="sb-check">

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, errorText } from "../api";
-import { WIP_ID, type FileChange, type FileViewMode, type OpenFile, type RepoData, type WipStatus } from "../types";
-import { fileStats, plural, relativeTime, REPOS_CHANGED } from "../util";
+import { WIP_ID, type CheckoutWarning, type FileChange, type FileViewMode, type OpenFile, type RepoData, type WipStatus } from "../types";
+import { fileStats, notifyReposChanged, plural, relativeTime, REPOS_CHANGED } from "../util";
 import { showToast } from "../toast";
 import { CommitList, type ListHandle } from "./CommitList";
 import { CommitPanel } from "./CommitPanel";
@@ -47,6 +47,9 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
   const [banner, setBanner] = useState<string | null>(null);
   const [fetchInfo, setFetchInfo] = useState<{ last: number | null; error: string | null }>({ last: null, error: null });
   const [pushPrompt, setPushPrompt] = useState<{ remote: string; branch: string } | null>(null);
+  const [checkoutPrompt, setCheckoutPrompt] = useState<
+    { branch: string; track: string | null; warning: CheckoutWarning } | null
+  >(null);
 
   const [sessions, setSessions] = useState<TermSession[]>([]);
   const [activeTerm, setActiveTerm] = useState<number | null>(null);
@@ -293,6 +296,38 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
     });
   }, []);
 
+  const doCheckout = async (branch: string, track: string | null) => {
+    setCheckoutPrompt(null);
+    setBanner(null);
+    try {
+      await api.checkoutBranch(path, branch, track);
+      const local = (await load())?.locals.find((l) => l.name === branch);
+      await refreshWip();
+      notifyReposChanged();
+      showToast(
+        local?.behind
+          ? `Switched to ${branch} (${local.behind} behind ${local.upstream}; Pull to update)`
+          : `Switched to ${branch}`,
+        "success",
+      );
+    } catch (e) {
+      setBanner(errorText(e));
+    }
+  };
+
+  const checkoutRef = useRef<(branch: string, track: string | null) => Promise<void>>(async () => {});
+  checkoutRef.current = async (branch, track) => {
+    if (dataRef.current?.head.branch === branch) return;
+    try {
+      const warning = await api.sfCheckoutWarning(path, branch);
+      if (warning) setCheckoutPrompt({ branch, track, warning });
+      else await doCheckout(branch, track);
+    } catch (e) {
+      setBanner(errorText(e));
+    }
+  };
+  const checkout = useCallback((branch: string, track: string | null) => void checkoutRef.current(branch, track), []);
+
   const jump = (oid: string) => {
     if (!data?.commits.some((c) => c.id === oid)) {
       showToast("That commit isn't in the loaded history.");
@@ -401,9 +436,17 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
           </button>
         </div>
       )}
+      {checkoutPrompt && (
+        <CheckoutPrompt
+          repo={data.name}
+          {...checkoutPrompt}
+          onCancel={() => setCheckoutPrompt(null)}
+          onConfirm={() => void doCheckout(checkoutPrompt.branch, checkoutPrompt.track)}
+        />
+      )}
       <div className="repo-main">
         {sidebarOpen ? (
-          <Sidebar data={data} onJump={jump} onCollapse={() => setSidebarOpen(false)} />
+          <Sidebar data={data} onJump={jump} onCheckout={checkout} onCollapse={() => setSidebarOpen(false)} />
         ) : (
           <div className="sb-collapsed">
             <button className="icon-btn round" onClick={() => setSidebarOpen(true)} title="Show sidebar">
@@ -413,7 +456,14 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
         )}
         <div className="center">
           <div className="center-fill" style={{ display: openFile ? "none" : undefined }}>
-            <CommitList data={data} wipStats={wipStats} selected={selected} onSelect={select} handleRef={listRef} />
+            <CommitList
+              data={data}
+              wipStats={wipStats}
+              selected={selected}
+              onSelect={select}
+              onCheckout={checkout}
+              handleRef={listRef}
+            />
           </div>
           {openFile && (
             <DiffView
@@ -550,6 +600,46 @@ function PushPrompt({
         <button className="btn primary" disabled={!branch.trim()} onClick={() => onPush(remote, branch.trim())}>
           Push
         </button>
+      </div>
+    </div>
+  );
+}
+
+function CheckoutPrompt(p: {
+  repo: string;
+  branch: string;
+  warning: CheckoutWarning;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const w = p.warning;
+  return (
+    <div className="modal-backdrop" onMouseDown={p.onCancel}>
+      <div className="modal sf-confirm" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-title">Switch to {p.branch}?</div>
+        <p>
+          “{w.featureName}” is active in {w.envName}, and {p.repo} belongs on <b>{w.featureBranch}</b>.
+        </p>
+        {w.kind === "base" ? (
+          <p>
+            Fine for looking around, but any file you change on {w.base} moves straight back to {w.featureBranch},
+            and commits on {w.base} are blocked. To leave the feature in every repo, use Back to base in Smart
+            Features.
+          </p>
+        ) : (
+          <p>
+            Changes made on {p.branch} aren't part of the feature, and {w.envName} can't switch features or go back
+            to base until {p.repo} is on {w.featureBranch} or {w.base} again.
+          </p>
+        )}
+        <div className="popover-actions">
+          <button className="btn" onClick={p.onCancel}>
+            Cancel
+          </button>
+          <button className="btn primary" autoFocus onClick={p.onConfirm}>
+            Switch anyway
+          </button>
+        </div>
       </div>
     </div>
   );

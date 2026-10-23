@@ -4,6 +4,7 @@ import type {
   AutoBranched,
   BranchCheck,
   CommitDetail,
+  CheckoutWarning,
   CommitGuard,
   FinishRepo,
   Preflight,
@@ -54,6 +55,9 @@ export const api = {
     invoke<{ count: number; upstream: string | null }>("pull_repo", { path }),
   pushRepo: (path: string, remote: string | null, branch: string | null) =>
     invoke<{ upstream: string | null }>("push_repo", { path, remote, branch }),
+  /** Switch to local `branch` where it is; with no local branch, create it from `track` (e.g. "origin/x"). */
+  checkoutBranch: (path: string, branch: string, track: string | null) =>
+    invoke<string>("checkout_branch", { path, branch, track }),
   ptySpawn: (cwd: string, kind: "claude" | "shell", cols: number, rows: number) =>
     invoke<number>("pty_spawn", { cwd, kind, cols, rows }),
   ptyWrite: (id: number, data: string) => invoke<void>("pty_write", { id, data }),
@@ -91,6 +95,8 @@ export const api = {
   sfMoveToFeature: (envId: string, repoId: string) =>
     invoke<AutoBranched | null>("sf_move_to_feature", { envId, repoId }),
   sfCommitGuard: (path: string) => invoke<CommitGuard | null>("sf_commit_guard", { path }),
+  sfCheckoutWarning: (path: string, branch: string) =>
+    invoke<CheckoutWarning | null>("sf_checkout_warning", { path, branch }),
   sfCheckoutRemote: (envId: string, repoId: string) => invoke<SmartEnv>("sf_checkout_remote", { envId, repoId }),
   sfRenameFeature: (envId: string, featureId: string, name: string) =>
     invoke<SmartEnv>("sf_rename_feature", { envId, featureId, name }),

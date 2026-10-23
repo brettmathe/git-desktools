@@ -282,6 +282,15 @@ export interface FeatureRef {
   parked: boolean;
 }
 
+export interface CheckoutWarning {
+  envName: string;
+  featureName: string;
+  featureBranch: string;
+  base: string;
+  /** base: edits there move back onto the feature branch. other: the environment can't switch features until the repo returns. */
+  kind: "base" | "other";
+}
+
 export interface BranchCheck {
   error: string | null;
   repos: {

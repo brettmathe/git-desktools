@@ -66,6 +66,18 @@ Verified: signed local `tauri build` produces the `.app.tar.gz` + `.sig`; Settin
 Chrome (silent launch check under the dev bridge). Not yet verified: an end-to-end update from a
 published release.
 
+**Double-click checkout** (2026-10-23): double-click a local branch in the sidebar, a remote branch in
+the sidebar, or a graph row to switch to it (`checkout_branch`). A local branch is checked out where it
+is, never moved to its upstream (the toast says "N behind origin/x; Pull to update"). With no local
+branch, a remote branch becomes a local one tracking it. A graph row picks its first local branch that
+isn't checked out, else a remote-only branch (`checkoutTarget` in `src/refs.ts`). `git switch` carries
+uncommitted changes and refuses to overwrite them (shown in the error banner); refused during a Smart
+Features switch. When the repo's environment has an active feature and the target isn't its branch,
+`sf_checkout_warning` drives a confirm dialog: on base, edits move back onto the feature branch and
+commits are blocked; on any other branch, the environment can't switch features or go back to base
+until the repo returns. Verified: Rust test (stays at the local commit, tracking branch, warning kinds),
+`src/refs.test.ts`, and a headless-Chrome run of base / other / feature-branch double-clicks.
+
 Graph lane rule (refined during testing): a commit's first parent folds into an existing lane only when
 that lane is to its left; otherwise it continues straight down. Keeps main history in column 0 and the
 graph narrow (lobby-mfe: 6 lanes).
@@ -121,7 +133,7 @@ graph narrow (lobby-mfe: 6 lanes).
 - Sections with counts: **LOCAL**, **REMOTE**, **TAGS** (TAGS collapsed by default — lobby-mfe has 515).
 - LOCAL: branch icon + name; HEAD branch row highlighted **green with a ✓**; ahead/behind vs upstream shown as `1↑` / `1↓` on the right.
 - REMOTE: grouped per remote (GitHub icon if URL is github.com), then a folder tree split on `/` (e.g. `dependabot/github_actions/vendored-acti…`). Skip `origin/HEAD`.
-- Clicking any branch/tag selects its target commit and scrolls the graph to it.
+- Clicking any branch/tag selects its target commit and scrolls the graph to it. Double-clicking a branch checks it out (see Status).
 
 ### Commit graph list (screenshots 01, 05, 06)
 - Columns: **BRANCH / TAG** | **GRAPH** | **COMMIT MESSAGE**. First two widths resizable by dragging header borders. Graph column scrolls horizontally (horizontal wheel / small slider) when lanes exceed width.
@@ -198,6 +210,7 @@ graph narrow (lobby-mfe: 6 lanes).
 | `fetch_repo(path, quiet)` | runs `git fetch --all --prune` (`--quiet` when background). Env `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, and a hard **timeout (~45s, kill the child)** so a background fetch can never hang waiting on a credential/SSH prompt. Shares the per-repo network lock with pull/push; returns `{skipped: true}` if the lock is held |
 | `stage_files(path, files)` / `unstage_files(path, files)` | `git add -A -- <files>` / `git restore --staged -- <files>` (no HEAD yet → `git rm --cached -r -- <files>`); an empty `files` = all |
 | `pull_repo(path)` | runs `git pull --ff-only --progress`, env `GIT_TERMINAL_PROMPT=0`, emits `pull-progress` events; returns `{before, after}` HEAD shas so the UI can count pulled commits; error = stderr (diverged / would overwrite local changes) |
+| `checkout_branch(path, branch, track?)` | `git switch <branch>` if it exists locally (never moves it), else `git switch -c <branch> --track <track>`; refused during a Smart Features switch |
 | `push_repo(path, remote?, branch?)` | runs `git push --progress` (with `-u <remote> HEAD:<branch>` when setting an upstream), env `GIT_TERMINAL_PROMPT=0`, emits `push-progress` events; error = stderr. Never `--force` |
 | `head_message(path)` | HEAD's full message (for Amend prefill) |
 | `commit(path, message, amend)` | `git commit -F -` with the message on stdin (`--amend` if set) so hooks, signing and the user's identity config all apply; returns new HEAD sha; error = stderr |
@@ -431,4 +444,4 @@ Edge cases:
 - Next: a manual run with the real RGT repos, then Phase 4 items when asked.
 
 ## Phase 2 (not in v1 unless asked)
-Partial (hunk/line) staging, checkout branch (double-click), pull with rebase/merge, stash UI (Smart Features stashes are separate, see above), commit search/filter, blame/history, split diff, syntax highlighting, watching `.git` with a filesystem watcher instead of focus polling, OS notifications when auto-fetch finds new commits.
+Partial (hunk/line) staging, pull with rebase/merge, stash UI (Smart Features stashes are separate, see above), commit search/filter, blame/history, split diff, syntax highlighting, watching `.git` with a filesystem watcher instead of focus polling, OS notifications when auto-fetch finds new commits.

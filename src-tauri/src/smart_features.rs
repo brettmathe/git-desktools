@@ -272,6 +272,37 @@ pub fn switch_running(store: &SmartStore, path: &str) -> Option<String> {
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutWarning {
+    env_name: String,
+    feature_name: String,
+    feature_branch: String,
+    base: String,
+    /// "base": edits there are moved back onto the feature branch.
+    /// "other": switching features and Back to base refuse until the repo returns.
+    kind: &'static str,
+}
+
+/// Some(..) when checking out `branch` in `path` takes the repo off its
+/// environment's active feature.
+pub fn checkout_warning(store: &SmartStore, path: &str, branch: &str) -> Option<CheckoutWarning> {
+    let (env, r) = store.find_repo(path)?;
+    let feature = env.active_feature()?;
+    if feature.branch == branch {
+        return None;
+    }
+    let repo = Repository::open(&r.path).ok()?;
+    let base = base_of(&env, &r, &repo)?;
+    Some(CheckoutWarning {
+        env_name: env.name.clone(),
+        feature_name: feature.name.clone(),
+        feature_branch: feature.branch.clone(),
+        kind: if base == branch { "base" } else { "other" },
+        base,
+    })
+}
+
 pub fn guard_message(g: &CommitGuard) -> String {
     format!(
         "\"{}\" is active in {}, so this commit belongs on {}, not {}. Move the changes to {} first.",
@@ -621,6 +652,12 @@ pub async fn sf_commit_guard(store: State<'_, SmartStore>, path: String) -> CmdR
 }
 
 #[tauri::command]
+pub async fn sf_checkout_warning(store: State<'_, SmartStore>, path: String, branch: String) -> CmdResult<Option<CheckoutWarning>> {
+    let store = store.inner().clone();
+    blocking(move || Ok(checkout_warning(&store, &path, &branch))).await
+}
+
+#[tauri::command]
 pub async fn sf_checkout_remote(store: State<'_, SmartStore>, env_id: String, repo_id: String) -> CmdResult<SmartEnv> {
     let store = store.inner().clone();
     blocking(move || checkout_remote(&store, &env_id, &repo_id)).await
@@ -876,5 +913,52 @@ pub(crate) mod tests {
         // a is up to date now.
         let again = merge_base(&store, &locks, &env_id).unwrap();
         assert_eq!(again.iter().find(|o| o.label == "a").unwrap().status, "skipped");
+    }
+
+    #[test]
+    fn checkout_stays_at_the_local_commit_and_warns_off_feature() {
+        let (s, store, env_id, p) = setup("checkout", &["a"]);
+        let path = p[0].to_str().unwrap().to_string();
+        let run = |b: &str, t: Option<&str>| {
+            tauri::async_runtime::block_on(crate::git::checkout_impl(
+                Some(store.clone()),
+                path.clone(),
+                b.into(),
+                t.map(str::to_string),
+            ))
+        };
+        // A teammate moves main and pushes feat/team; a fetch brings both in.
+        let other = s.path("other");
+        sh(&s.0, &["clone", "-q", s.path("remotes/a.git").to_str().unwrap(), other.to_str().unwrap()]);
+        sh(&other, &["commit", "-q", "--allow-empty", "-m", "main moved"]);
+        sh(&other, &["push", "-q", "origin", "main"]);
+        sh(&other, &["switch", "-qc", "feat/team"]);
+        sh(&other, &["push", "-q", "origin", "feat/team"]);
+        sh(&p[0], &["switch", "-qc", "side"]);
+        sh(&p[0], &["fetch", "-q"]);
+        let tip = |r: &str| Repository::open(&p[0]).unwrap().revparse_single(r).unwrap().id();
+        let main_before = tip("main");
+        assert_ne!(main_before, tip("origin/main"));
+
+        // Local main is behind origin/main: switching leaves it where it is.
+        run("main", Some("origin/main")).unwrap();
+        assert_eq!(head(&p[0]).as_deref(), Some("main"));
+        assert_eq!(tip("HEAD"), main_before);
+        // No local feat/team: created at origin/feat/team, tracking it.
+        run("feat/team", Some("origin/feat/team")).unwrap();
+        assert_eq!(head(&p[0]).as_deref(), Some("feat/team"));
+        assert_eq!(tip("HEAD"), tip("origin/feat/team"));
+        let repo = Repository::open(&p[0]).unwrap();
+        assert!(repo.find_branch("feat/team", BranchType::Local).unwrap().upstream().is_ok());
+        assert!(run("nope", None).is_err());
+        assert!(run("-x", None).is_err());
+
+        // Warnings only while a feature is active, and not for its own branch.
+        assert!(checkout_warning(&store, &path, "main").is_none());
+        start_feature(&store, &NetLocks::default(), &env_id, "Game", "feat/g", false).unwrap();
+        let w = |b: &str| checkout_warning(&store, &path, b).map(|w| w.kind);
+        assert_eq!(w("main"), Some("base"));
+        assert_eq!(w("side"), Some("other"));
+        assert_eq!(w("feat/g"), None);
     }
 }
