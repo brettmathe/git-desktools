@@ -1,6 +1,6 @@
 [package]
 name = "git-desktools"
-version = "0.2.0"
+version = "0.3.0"
 description = "A lightweight cross-platform git GUI"
 edition = "2021"
 
