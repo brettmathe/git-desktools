@@ -45,7 +45,7 @@ pub(crate) fn open(path: &str) -> CmdResult<Repository> {
     Repository::open(path).map_err(e)
 }
 
-fn lossy(bytes: &[u8]) -> String {
+pub(crate) fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
@@ -107,6 +107,7 @@ pub struct GitRun {
     pub stdin: Option<String>,
     pub timeout: Option<Duration>,
     pub progress: Option<Progress>,
+    pub env: Vec<(&'static str, String)>,
 }
 
 pub(crate) fn git_command(cwd: &Path) -> Command {
@@ -140,6 +141,7 @@ fn git_error(stderr: &str, fallback: String) -> String {
 pub fn run_git(cwd: &Path, run: GitRun) -> CmdResult<()> {
     let mut child = git_command(cwd)
         .args(&run.args)
+        .envs(run.env.iter().map(|(k, v)| (*k, v.as_str())))
         .stdin(if run.stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -213,7 +215,7 @@ pub fn run_git(cwd: &Path, run: GitRun) -> CmdResult<()> {
     }
 }
 
-fn args<const N: usize>(a: [&str; N]) -> Vec<String> {
+pub(crate) fn args<const N: usize>(a: [&str; N]) -> Vec<String> {
     a.iter().map(|s| s.to_string()).collect()
 }
 
@@ -594,7 +596,8 @@ fn build_repo_data(path: &str) -> CmdResult<RepoData> {
     let refs = collect_refs(&repo)?;
     let head = head_info(&repo);
     let head_oid = head.oid.as_deref().and_then(|o| Oid::from_str(o).ok());
-    let has_wip = is_dirty(&repo);
+    // A merge whose resolution matches HEAD has no changes but still needs committing.
+    let has_wip = is_dirty(&repo) || crate::conflict::op_state(&repo).is_some();
     let fingerprint = fingerprint_of(&repo, &refs.labels);
 
     let mut label_map: HashMap<Oid, Vec<RefLabel>> = HashMap::new();
@@ -738,7 +741,7 @@ fn parse_co_authors(message: &str) -> Vec<CoAuthor> {
 pub struct FileChange {
     path: String,
     old_path: Option<String>,
-    status: String,
+    pub(crate) status: String,
     additions: usize,
     deletions: usize,
     binary: bool,
@@ -955,12 +958,12 @@ pub async fn wip_file_diff(path: String, file: String, old_file: Option<String>,
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileContent {
-    binary: bool,
-    truncated: bool,
-    content: String,
+    pub(crate) binary: bool,
+    pub(crate) truncated: bool,
+    pub(crate) content: String,
 }
 
-fn to_content(bytes: &[u8]) -> FileContent {
+pub(crate) fn to_content(bytes: &[u8]) -> FileContent {
     let binary = bytes.iter().take(8000).any(|&b| b == 0);
     if binary {
         return FileContent { binary, truncated: false, content: String::new() };
@@ -1007,9 +1010,12 @@ pub async fn file_content(path: String, oid: Option<String>, file: String) -> Cm
 pub struct WipStatus {
     unstaged: Vec<FileChange>,
     staged: Vec<FileChange>,
+    /// A merge, rebase, etc. in progress (or a stash that applied with conflicts).
+    /// Its conflicted files are listed there, not in `unstaged`.
+    op: Option<crate::conflict::RepoOp>,
 }
 
-fn change(path: String, old_path: Option<String>, status: &str) -> FileChange {
+pub(crate) fn change(path: String, old_path: Option<String>, status: &str) -> FileChange {
     FileChange { path, old_path, status: status.into(), additions: 0, deletions: 0, binary: false }
 }
 
@@ -1028,7 +1034,6 @@ pub async fn wip_status(path: String) -> CmdResult<WipStatus> {
             let s = entry.status();
             let path = lossy(entry.path_bytes()).replace('\\', "/");
             if s.contains(Status::CONFLICTED) {
-                unstaged.push(change(path, None, "U"));
                 continue;
             }
             let staged_status = if s.contains(Status::INDEX_NEW) {
@@ -1072,12 +1077,12 @@ pub async fn wip_status(path: String) -> CmdResult<WipStatus> {
         }
         staged.sort_by(|a, b| a.path.cmp(&b.path));
         unstaged.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(WipStatus { unstaged, staged })
+        Ok(WipStatus { unstaged, staged, op: crate::conflict::op_state(&repo) })
     })
     .await
 }
 
-fn with_paths(mut base: Vec<String>, files: &[String]) -> Vec<String> {
+pub(crate) fn with_paths(mut base: Vec<String>, files: &[String]) -> Vec<String> {
     base.push("--".into());
     base.extend(files.iter().cloned());
     base

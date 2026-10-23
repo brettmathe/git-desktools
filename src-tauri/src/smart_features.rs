@@ -10,6 +10,7 @@
 use crate::git::{
     blocking, head_branch, is_dirty, now_secs, run_git, CmdResult, GitRun, NetLocks, BUSY, MANUAL_FETCH_TIMEOUT,
 };
+use crate::conflict::conflicted_paths;
 use crate::smart_switch::switch_locked;
 use crate::smart::{base_tip, new_id, resolve_base, Feature, FeatureRepo, SmartEnv, SmartRepo, SmartStore};
 use git2::{BranchType, Repository, RepositoryState};
@@ -577,16 +578,6 @@ fn merge_one(locks: &NetLocks, env: &SmartEnv, r: &SmartRepo, branch: &str) -> M
             )
         }
     }
-}
-
-fn conflicted_paths(repo: &Repository) -> Vec<String> {
-    let Ok(index) = repo.index() else { return Vec::new() };
-    let Ok(conflicts) = index.conflicts() else { return Vec::new() };
-    conflicts
-        .filter_map(|c| c.ok())
-        .filter_map(|c| c.our.or(c.their).or(c.ancestor))
-        .map(|e| String::from_utf8_lossy(&e.path).to_string())
-        .collect()
 }
 
 /// Merge each repo's base (origin/<base> after fetching it) into the active

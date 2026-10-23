@@ -3,7 +3,7 @@ import { WIP_COLOR, WIP_ID, type Author, type CommitRow, type RefLabel, type Rep
 import { checkoutTarget, toPills } from "../refs";
 import { dateBucket, laneColor, WIP_STROKE, type FileStats } from "../util";
 import { Avatar } from "./Avatar";
-import { CheckIcon, CloudIcon, GitHubIcon, LaptopIcon, MinusIcon, PencilIcon, PlusIcon, TagIcon } from "./icons";
+import { CheckIcon, CloudIcon, GitHubIcon, LaptopIcon, PencilIcon, PlusIcon, TagIcon, WarningIcon, XIcon } from "./icons";
 import { clamp, Resizer } from "./Resizer";
 
 export const ROW_H = 30;
@@ -33,6 +33,8 @@ export interface ListHandle {
 interface Props {
   data: RepoData;
   wipStats: FileStats | null;
+  /** A merge, rebase, etc. is in progress: shown on the WIP row instead of the counts. */
+  opNote: string | null;
   selected: string | null;
   onSelect: (id: string) => void;
   /** Double-click a row: check out a branch that points at it. */
@@ -40,7 +42,7 @@ interface Props {
   handleRef: React.RefObject<ListHandle | null>;
 }
 
-export function CommitList({ data, wipStats, selected, onSelect, onCheckout, handleRef }: Props) {
+export function CommitList({ data, wipStats, opNote, selected, onSelect, onCheckout, handleRef }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewH, setViewH] = useState(800);
@@ -137,6 +139,7 @@ export function CommitList({ data, wipStats, selected, onSelect, onCheckout, han
         graphContentW={graphContentW}
         bucket={buckets[i]}
         wipStats={c.id === WIP_ID ? wipStats : null}
+        opNote={c.id === WIP_ID ? opNote : null}
         githubRemotes={githubRemotes}
         onSelect={onSelect}
         onCheckout={onCheckout}
@@ -201,6 +204,7 @@ interface RowProps {
   graphContentW: number;
   bucket: string | null;
   wipStats: FileStats | null;
+  opNote: string | null;
   githubRemotes: Set<string>;
   onSelect: (id: string) => void;
   onCheckout: (branch: string, track: string | null) => void;
@@ -212,7 +216,7 @@ const Row = memo(function Row(p: RowProps) {
   const color = laneColor(c.color);
   const nx = laneX(c.lane);
   const hasRefs = c.refs.length > 0;
-  const tooltip = isWip ? "Uncommitted changes" : c.body ? `${c.summary}\n\n${c.body}` : c.summary;
+  const tooltip = isWip ? (p.opNote ?? "Uncommitted changes") : c.body ? `${c.summary}\n\n${c.body}` : c.summary;
 
   return (
     <div
@@ -260,7 +264,11 @@ const Row = memo(function Row(p: RowProps) {
         </div>
       </div>
       <div className="cl-msg" style={{ borderLeftColor: isWip ? WIP_STROKE : color }} title={tooltip}>
-        {isWip ? (
+        {isWip && p.opNote ? (
+          <span className="cl-op-note">
+            <WarningIcon size={14} /> {p.opNote}
+          </span>
+        ) : isWip ? (
           <>
             <span className="cl-wip-label">// WIP</span>
             {p.wipStats && <WipCounts stats={p.wipStats} />}
@@ -292,7 +300,7 @@ export function WipCounts({ stats }: { stats: FileStats }) {
       )}
       {stats.deleted > 0 && (
         <span className="st-deleted">
-          <MinusIcon size={12} /> {stats.deleted}
+          <XIcon size={12} /> {stats.deleted}
         </span>
       )}
     </span>

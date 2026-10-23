@@ -201,7 +201,7 @@ export function StatusIcon({ status, size = 13 }: { status: string; size?: numbe
     case "C":
       return <PlusIcon size={size} className="st st-added" />;
     case "D":
-      return <MinusIcon size={size} className="st st-deleted" />;
+      return <XIcon size={size} className="st st-deleted" />;
     case "R":
       return <RenameIcon size={size} className="st st-renamed" />;
     case "U":

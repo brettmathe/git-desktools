@@ -8,6 +8,8 @@ Built with Tauri 2 (Rust) and React.
 - Commit details: message, author/committer, co-authors, changed files (path or tree), diffs
 - Working-tree changes (`// WIP`): stage/unstage, commit, amend
 - Fetch, Pull (fast-forward only), Push (sets upstream for new branches), background auto-fetch
+- Merge conflicts (from a merge, pull, rebase, cherry-pick, revert, `git am` or stash pop): pick lines from
+  each side into an editable output, keep or delete files, then commit/continue, skip, or abort back to where you were
 - Double-click a branch (sidebar or graph) to check it out where it is; remote-only branches become local tracking branches
 - Smart Features: group repos into an environment, start a feature branch that's created only in the repos you change,
   switch between features with uncommitted work parked and restored, and Fetch / Pull / Push all or merge the base

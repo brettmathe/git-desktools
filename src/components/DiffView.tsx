@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import { api, errorText } from "../api";
-import type { FileContent, FileDiff, OpenFile } from "../types";
+import type { DiffTarget, FileContent, FileDiff } from "../types";
 import { splitPath } from "../util";
 import { StatusIcon, XIcon } from "./icons";
 
 interface Props {
   path: string;
-  target: OpenFile;
+  target: DiffTarget;
   headOid: string | null;
   version: number;
   active: boolean;

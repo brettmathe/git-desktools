@@ -19,6 +19,10 @@ them before building UI:
 | `06-local-behind-remote.png` | Local `main` behind `origin/main`: separate pills on different rows |
 | `07-wip-unstaged-changes.png` | `// WIP` row at top of graph, right panel with Unstaged/Staged files, "Stage All Changes" |
 | `08-wip-staged-commit-box.png` | Files moved to Staged, "Unstage All Changes", commit box (Amend, summary + 72-char counter, description, commit button) |
+| `09-merge-conflicts-panel.png` | Mid-merge: amber WIP row "4 file conflicts…", right panel "Merge conflicts detected", Conflicted / Resolved files, Commit and Merge / Abort Merge |
+| `10-conflict-editor.png` | Conflict editor: A (ours) and B (theirs) panes with per-line checkboxes, Output pane (base lines for unpicked conflicts), "conflict 3 of 4" nav |
+| `11-conflict-editor-picked.png` | Lines picked from A and B; Output shows them with A/B gutter marks and ✓, Reset |
+| `12-merge-file-resolved.png` | After Save: app.js under Resolved Files with a "Mark conflicted" hover button |
 
 Test repos on this machine:
 - `~/wahoo/dex1/mfe/lobby-mfe` — 2,303 commits, 617 refs (100 remote branches, 515 tags), 143 merges. Primary graph stress test (matches screenshot 05).
@@ -77,6 +81,16 @@ Features switch. When the repo's environment has an active feature and the targe
 commits are blocked; on any other branch, the environment can't switch features or go back to base
 until the repo returns. Verified: Rust test (stays at the local commit, tracking branch, warning kinds),
 `src/refs.test.ts`, and a headless-Chrome run of base / other / feature-branch double-clicks.
+
+**Merge conflicts** (2026-10-23): a conflict screen for every operation that can stop on conflicts
+(merge/pull, cherry-pick, revert, rebase, `git am`, stash apply/pop), styled after screenshots 09–12. See
+"Merge conflicts" under Features. Verified: Rust tests in `conflict.rs` (state and labels for each op,
+stage versions, resolve/take/mark round trip, abort restores HEAD, continue keeps edited messages and
+authors, a rebase that stops twice, stash pop keeps the stash), `src/merge3.test.ts` (diff3, the fixture's
+app.js gives 4 conflicts), and headless-Chrome runs on a fixture repo in each mode: picks → Output, Save,
+Mark conflicted, Mark All Resolved marker warning, keep/delete choice, hand edit, Commit and Merge (2
+parents), Continue Rebase / Cherry-pick with an edited message, and Abort for rebase, cherry-pick and stash.
+Not verified: `git am` conflicts and binary-file conflicts (no test covers them yet).
 
 Graph lane rule (refined during testing): a commit's first parent folds into an existing lane only when
 that lane is to its left; otherwise it continues straight down. Keeps main history in column 0 and the
@@ -180,6 +194,32 @@ graph narrow (lobby-mfe: 6 lanes).
 - Diff View: unified, hunk headers `@@ -80,4 +80,5 @@`, two line-number gutters, green/red line backgrounds, monospace. "No newline at end of file" markers. Binary → "Binary file" notice. Cap ~20k lines with a notice.
 - File View: full file content at that commit (or workdir for WIP) with line numbers; deleted files show the parent's version.
 
+### Merge conflicts (screenshots 09–12)
+- **Detection:** `wip_status` returns `op` whenever `repo.state()` isn't Clean (merge, cherry-pick, revert,
+  rebase, am), or the index has conflicts with no operation (a stash apply/pop: `kind: "stash"`). The WIP row
+  shows then, even with nothing changed, and the graph's WIP row becomes an amber note ("4 file conflicts were
+  found when attempting to merge into main"). When an op appears the WIP row is selected.
+- **Sides:** A = ours (HEAD), B = theirs (MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD; for a rebase A is the
+  new base and B the commit being replayed, since git swaps them). Labels come from MERGE_MSG ("Merge branch
+  'x'"), a branch pointing at the commit, or "sha summary".
+- **Right panel** (`ConflictPanel`): title per op, "Merging B into main" / "Rebasing x onto main (2 of 5)",
+  Path/Tree, **Conflicted Files** (Mark All Resolved, which warns about files still containing markers;
+  right-click: Mark resolved, Take A, Take B), **Resolved Files** (staged, plus files resolved to HEAD's
+  version this session; "Mark conflicted" = `git checkout -m`), Unstaged Files if any. Commit box (shared
+  `CommitBox`) prefilled from git's prepared message (`MERGE_MSG`, `rebase-merge/message`); read-only for am
+  and apply-style rebases. Buttons: Commit and Merge / Continue …, Skip (rebase, cherry-pick, revert, am),
+  Abort … (confirmed). A stash conflict has no commit box, only "Undo Stash Apply" (`git reset --merge`;
+  the stash entry is kept).
+- **Editor** (`ConflictView`, replaces the graph): `src/merge3.ts` runs a line diff3 (Myers) over the index's
+  base/ours/theirs, so one-sided changes merge and git's hunks split into finer conflicts. A and B panes show
+  each side's whole file with conflict lines tinted and checkable (header checkbox = that side for every
+  conflict; A and B scroll together). Output shows base lines for unpicked conflicts (magenta), picked lines
+  as A's then B's in file order, "conflict k of N" with ↑/↓, Reset, and Edit (or double-click) for a
+  free-text textarea, which locks the picks until Reset. Save writes the file and stages it; it asks first
+  if conflicts are unpicked.
+- **Other conflicts** (deleted on one side, added on one side, binary): a short explanation, a preview of
+  the surviving version, and Keep A's / Keep B's version / Delete file (`resolve_take`).
+
 ### Terminal panel
 - Bottom panel spanning the repo tab, resizable height (drag top edge), hide button. Session tabs ("Claude 1", "Shell 1"), `+ Claude`, `+ Shell`, close a session (kills the pty).
 - Claude session (unix): spawn `$SHELL -l -i -c "claude; exec '<shell>' -l -i"` in the repo root so PATH from the user's dotfiles applies and the shell remains after Claude exits. Shell session: `$SHELL -l -i`. Windows: `powershell.exe -NoLogo -NoExit -Command claude` / `powershell.exe -NoLogo`.
@@ -210,6 +250,10 @@ graph narrow (lobby-mfe: 6 lanes).
 | `fetch_repo(path, quiet)` | runs `git fetch --all --prune` (`--quiet` when background). Env `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, and a hard **timeout (~45s, kill the child)** so a background fetch can never hang waiting on a credential/SSH prompt. Shares the per-repo network lock with pull/push; returns `{skipped: true}` if the lock is held |
 | `stage_files(path, files)` / `unstage_files(path, files)` | `git add -A -- <files>` / `git restore --staged -- <files>` (no HEAD yet → `git rm --cached -r -- <files>`); an empty `files` = all |
 | `pull_repo(path)` | runs `git pull --ff-only --progress`, env `GIT_TERMINAL_PROMPT=0`, emits `pull-progress` events; returns `{before, after}` HEAD shas so the UI can count pulled commits; error = stderr (diverged / would overwrite local changes) |
+| `conflict_versions(path, file)` | `{base, ours, theirs}` from index stages 1–3 (`conflict.rs`, as are the next rows) |
+| `resolve_file(path, file, content)` / `resolve_take(path, file, side)` | write + `git add`; or `git checkout --ours/--theirs` + add, or `git rm` |
+| `conflict_markers(path, files)` / `mark_resolved` / `mark_conflicted` | files still holding `<<<<<<<…>>>>>>>`; `git add`; `git checkout -m` |
+| `abort_operation` / `continue_operation(path, message)` / `skip_operation` | `git <op> --abort` (stash: `reset --merge`); merge = `commit_impl`, others write the message then `GIT_EDITOR=true git <op> --continue`; `--skip`. A rebase stopping on the next commit's conflicts isn't an error |
 | `checkout_branch(path, branch, track?)` | `git switch <branch>` if it exists locally (never moves it), else `git switch -c <branch> --track <track>`; refused during a Smart Features switch |
 | `push_repo(path, remote?, branch?)` | runs `git push --progress` (with `-u <remote> HEAD:<branch>` when setting an upstream), env `GIT_TERMINAL_PROMPT=0`, emits `push-progress` events; error = stderr. Never `--force` |
 | `head_message(path)` | HEAD's full message (for Amend prefill) |
