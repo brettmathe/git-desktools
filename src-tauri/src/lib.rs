@@ -129,6 +129,7 @@ pub fn run() {
             smart_features::sf_checkout_remote,
             smart_features::sf_rename_feature,
             smart_features::sf_push_all,
+            smart_features::sf_merge_base,
         ])
         .run(tauri::generate_context!())
         .expect("error while running git-desktools");

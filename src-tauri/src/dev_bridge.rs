@@ -55,6 +55,7 @@ const SF_MUTATING: &[&str] =
         "sf_move_to_feature",
         "sf_checkout_remote",
         "sf_push_all",
+        "sf_merge_base",
         "sf_switch_feature",
         "sf_resume_switch",
         "sf_mark_resolved",
@@ -175,6 +176,7 @@ fn smart_dispatch(b: &Bridge, cmd: &str, a: &Value) -> Result<Value, String> {
         "sf_checkout_remote" => to(sf::checkout_remote(store, &s(a, "envId"), &s(a, "repoId"))),
         "sf_rename_feature" => to(sf::rename_feature(store, &s(a, "envId"), &s(a, "featureId"), &s(a, "name"))),
         "sf_push_all" => to(sf::push_all(store, &b.locks, &s(a, "envId"), &s(a, "featureId"))),
+        "sf_merge_base" => to(sf::merge_base(store, &b.locks, &s(a, "envId"))),
         other => Err(format!("dev bridge: unsupported command {other}")),
     }
 }

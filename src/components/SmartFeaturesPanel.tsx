@@ -258,6 +258,25 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
       else showToast(`Nothing to push for ${f.name}`, "success");
     });
 
+  /** Merge each repo's base into the active feature's branch; dirty repos are skipped, conflicts aborted. */
+  const mergeBase = (env: SmartEnv, f: SmartFeature) =>
+    withEnv(env, async () => {
+      const out = await api.sfMergeBase(env.id);
+      const merged = out.filter((o) => o.status === "merged");
+      const failed = out.filter((o) => o.status === "failed");
+      const dirty = out.filter((o) => o.status === "skipped" && o.detail.startsWith("uncommitted"));
+      const notes = [...failed, ...dirty].map((o) => `${o.label}: ${o.detail.split("\n").pop()}`);
+      const done = merged.length
+        ? `Merged base into ${f.branch} in ${merged.map((o) => `${o.label} (${o.detail})`).join(", ")}`
+        : `${f.branch} already has its base in every clean repository`;
+      if (failed.length)
+        showToast(
+          `Merge failed for ${failed.length} of ${out.length}:\n${notes.join("\n")}${merged.length ? `\n\n${done}` : ""}`,
+          "error",
+        );
+      else showToast(dirty.length ? `${done}\nSkipped:\n${notes.join("\n")}` : done, "success");
+    });
+
   const checkoutRemote = (env: SmartEnv, s: SmartRepoStatus, f: SmartFeature) =>
     withEnv(env, async () => {
       await api.sfCheckoutRemote(env.id, s.repoId);
@@ -632,6 +651,13 @@ export function SmartFeaturesPanel({ ui, onUi, openPaths, onOpenRepo }: Props) {
                 {activeOf(env) && (
                   <>
                     <button onClick={() => void pushAll(env, activeOf(env)!)}>Push all</button>
+                    <button
+                      disabled={!!env.journal}
+                      title="Fetch each repo's base branch and merge origin/<base> into the feature branch"
+                      onClick={() => void mergeBase(env, activeOf(env)!)}
+                    >
+                      Merge base into feature
+                    </button>
                     <button
                       onClick={() => {
                         setMenu(null);
