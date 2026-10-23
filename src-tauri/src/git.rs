@@ -1224,6 +1224,46 @@ pub async fn commit_impl(
     .await
 }
 
+#[tauri::command]
+pub async fn checkout_branch(
+    store: State<'_, crate::smart::SmartStore>,
+    path: String,
+    branch: String,
+    track: Option<String>,
+) -> CmdResult<String> {
+    checkout_impl(Some(store.inner().clone()), path, branch, track).await
+}
+
+/// Switch to local `branch` where it is, without moving it. If there's no
+/// local branch, `track` (e.g. "origin/x") creates it at that remote branch.
+/// `git switch` carries uncommitted changes and refuses to overwrite any.
+pub async fn checkout_impl(
+    store: Option<crate::smart::SmartStore>,
+    path: String,
+    branch: String,
+    track: Option<String>,
+) -> CmdResult<String> {
+    blocking(move || {
+        if let Some(msg) = store.as_ref().and_then(|s| crate::smart_features::switch_running(s, &path)) {
+            return Err(msg);
+        }
+        if branch.is_empty() || branch.starts_with('-') || track.as_deref().is_some_and(|t| t.starts_with('-')) {
+            return Err(format!("Not a branch name: {branch}"));
+        }
+        let repo = open(&path)?;
+        let a = if repo.find_branch(&branch, BranchType::Local).is_ok() {
+            args(["switch", &branch])
+        } else if let Some(t) = &track {
+            args(["switch", "-c", &branch, "--track", t])
+        } else {
+            return Err(format!("There's no local branch {branch}."));
+        };
+        run_git(Path::new(&path), GitRun { args: a, ..Default::default() })?;
+        Ok(branch)
+    })
+    .await
+}
+
 // ---------------------------------------------------------------------------
 // Network operations
 

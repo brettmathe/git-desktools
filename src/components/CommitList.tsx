@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type WheelEvent } from "react";
 import { WIP_COLOR, WIP_ID, type Author, type CommitRow, type RefLabel, type RepoData, type Seg } from "../types";
+import { checkoutTarget, toPills } from "../refs";
 import { dateBucket, laneColor, WIP_STROKE, type FileStats } from "../util";
 import { Avatar } from "./Avatar";
 import { CheckIcon, CloudIcon, GitHubIcon, LaptopIcon, MinusIcon, PencilIcon, PlusIcon, TagIcon } from "./icons";
@@ -34,10 +35,12 @@ interface Props {
   wipStats: FileStats | null;
   selected: string | null;
   onSelect: (id: string) => void;
+  /** Double-click a row: check out a branch that points at it. */
+  onCheckout: (branch: string, track: string | null) => void;
   handleRef: React.RefObject<ListHandle | null>;
 }
 
-export function CommitList({ data, wipStats, selected, onSelect, handleRef }: Props) {
+export function CommitList({ data, wipStats, selected, onSelect, onCheckout, handleRef }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewH, setViewH] = useState(800);
@@ -136,6 +139,7 @@ export function CommitList({ data, wipStats, selected, onSelect, handleRef }: Pr
         wipStats={c.id === WIP_ID ? wipStats : null}
         githubRemotes={githubRemotes}
         onSelect={onSelect}
+        onCheckout={onCheckout}
       />,
     );
   }
@@ -199,6 +203,7 @@ interface RowProps {
   wipStats: FileStats | null;
   githubRemotes: Set<string>;
   onSelect: (id: string) => void;
+  onCheckout: (branch: string, track: string | null) => void;
 }
 
 const Row = memo(function Row(p: RowProps) {
@@ -214,6 +219,10 @@ const Row = memo(function Row(p: RowProps) {
       className={`cl-row${p.selected ? " selected" : ""}${isWip ? " wip" : ""}${p.bucket && p.index > 0 ? " bucket-start" : ""}`}
       style={{ top: p.index * ROW_H }}
       onClick={() => p.onSelect(c.id)}
+      onDoubleClick={() => {
+        const t = checkoutTarget(c.refs);
+        if (t) p.onCheckout(t.branch, t.track);
+      }}
     >
       <div className="cl-refs" style={{ width: p.refW }}>
         {hasRefs && <RefPills refs={c.refs} color={color} githubRemotes={p.githubRemotes} />}
@@ -288,26 +297,6 @@ export function WipCounts({ stats }: { stats: FileStats }) {
       )}
     </span>
   );
-}
-
-interface Pill {
-  name: string;
-  local: RefLabel | null;
-  remotes: RefLabel[];
-  tag: boolean;
-}
-
-function toPills(refs: RefLabel[]): Pill[] {
-  const pills: Pill[] = [];
-  for (const r of refs) {
-    if (r.kind === "local") pills.push({ name: r.name, local: r, remotes: [], tag: false });
-    else if (r.kind === "remote") {
-      const same = pills.find((p) => p.local && p.name === r.name);
-      if (same) same.remotes.push(r);
-      else pills.push({ name: r.name, local: null, remotes: [r], tag: false });
-    } else pills.push({ name: r.name, local: null, remotes: [], tag: true });
-  }
-  return pills;
 }
 
 function refTitle(r: RefLabel): string {

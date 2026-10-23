@@ -45,6 +45,7 @@ const MUTATING: &[&str] = &[
     "fetch_repo",
     "pull_repo",
     "push_repo",
+    "checkout_branch",
 ];
 
 const SF_MUTATING: &[&str] =
@@ -116,6 +117,9 @@ fn dispatch(b: &Bridge, cmd: &str, a: &Value) -> Result<Value, String> {
         "clone_repo" => to(block_on(git::clone_impl(s(a, "url"), s(a, "parentDir"), s(a, "name"), None))),
         "fetch_repo" => to(block_on(git::fetch_impl(&b.locks, s(a, "path"), flag(a, "quiet")))),
         "pull_repo" => to(block_on(git::pull_impl(&b.locks, s(a, "path"), None))),
+        "checkout_branch" => {
+            to(block_on(git::checkout_impl(b.smart.clone(), s(a, "path"), s(a, "branch"), opt(a, "track"))))
+        }
         "push_repo" => to(block_on(git::push_impl(&b.locks, s(a, "path"), opt(a, "remote"), opt(a, "branch"), None))),
         "load_settings" => Ok(b.settings.lock().unwrap().clone()),
         "save_settings" => {
@@ -173,6 +177,7 @@ fn smart_dispatch(b: &Bridge, cmd: &str, a: &Value) -> Result<Value, String> {
         }
         "sf_move_to_feature" => to(sf::auto_branch(store, &s(a, "envId"), &s(a, "repoId"), true)),
         "sf_commit_guard" => to(Ok(sf::commit_guard(store, &s(a, "path")))),
+        "sf_checkout_warning" => to(Ok(sf::checkout_warning(store, &s(a, "path"), &s(a, "branch")))),
         "sf_checkout_remote" => to(sf::checkout_remote(store, &s(a, "envId"), &s(a, "repoId"))),
         "sf_rename_feature" => to(sf::rename_feature(store, &s(a, "envId"), &s(a, "featureId"), &s(a, "name"))),
         "sf_push_all" => to(sf::push_all(store, &b.locks, &s(a, "envId"), &s(a, "featureId"))),
