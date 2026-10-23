@@ -1,3 +1,4 @@
+mod conflict;
 mod git;
 mod graph;
 mod pty;
@@ -104,6 +105,16 @@ pub fn run() {
             git::pull_repo,
             git::push_repo,
             git::checkout_branch,
+            conflict::conflict_versions,
+            conflict::resolve_file,
+            conflict::resolve_take,
+            conflict::conflict_markers,
+            conflict::mark_resolved,
+            conflict::resolved_status,
+            conflict::mark_conflicted,
+            conflict::abort_operation,
+            conflict::continue_operation,
+            conflict::skip_operation,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

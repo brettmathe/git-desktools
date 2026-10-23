@@ -4,10 +4,12 @@ import type {
   AutoBranched,
   BranchCheck,
   CommitDetail,
+  ConflictVersions,
   CheckoutWarning,
   CommitGuard,
   FinishRepo,
   Preflight,
+  FileChange,
   FileContent,
   FileDiff,
   RepoCheck,
@@ -55,6 +57,22 @@ export const api = {
     invoke<{ count: number; upstream: string | null }>("pull_repo", { path }),
   pushRepo: (path: string, remote: string | null, branch: string | null) =>
     invoke<{ upstream: string | null }>("push_repo", { path, remote, branch }),
+  conflictVersions: (path: string, file: string) => invoke<ConflictVersions>("conflict_versions", { path, file }),
+  /** Save the merged text and mark the file resolved. */
+  resolveFile: (path: string, file: string, content: string) => invoke<void>("resolve_file", { path, file, content }),
+  /** Resolve by taking one side whole, or deleting the file. */
+  resolveTake: (path: string, file: string, side: "ours" | "theirs" | "delete") =>
+    invoke<void>("resolve_take", { path, file, side }),
+  /** Which files (default: every conflicted one) still contain conflict markers. */
+  conflictMarkers: (path: string, files: string[]) => invoke<string[]>("conflict_markers", { path, files }),
+  /** Status ("D", "M", "A") of resolved files with nothing staged. */
+  resolvedStatus: (path: string, files: string[]) => invoke<FileChange[]>("resolved_status", { path, files }),
+  markResolved: (path: string, files: string[]) => invoke<void>("mark_resolved", { path, files }),
+  markConflicted: (path: string, file: string) => invoke<void>("mark_conflicted", { path, file }),
+  abortOperation: (path: string) => invoke<void>("abort_operation", { path }),
+  /** Commit the resolution and carry on; returns the new HEAD. */
+  continueOperation: (path: string, message: string) => invoke<string>("continue_operation", { path, message }),
+  skipOperation: (path: string) => invoke<string>("skip_operation", { path }),
   /** Switch to local `branch` where it is; with no local branch, create it from `track` (e.g. "origin/x"). */
   checkoutBranch: (path: string, branch: string, track: string | null) =>
     invoke<string>("checkout_branch", { path, branch, track }),

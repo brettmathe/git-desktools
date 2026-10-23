@@ -1,5 +1,5 @@
 import type { FileStats } from "../util";
-import { MinusIcon, PencilIcon, PlusIcon, RenameIcon } from "./icons";
+import { PencilIcon, PlusIcon, RenameIcon, XIcon } from "./icons";
 
 export function StatsLine({ stats }: { stats: FileStats }) {
   return (
@@ -16,7 +16,7 @@ export function StatsLine({ stats }: { stats: FileStats }) {
       )}
       {stats.deleted > 0 && (
         <span className="st-deleted">
-          <MinusIcon size={12} /> {stats.deleted} deleted
+          <XIcon size={12} /> {stats.deleted} deleted
         </span>
       )}
       {stats.renamed > 0 && (

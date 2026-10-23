@@ -1,20 +1,11 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState } from "react";
 import { api, errorText } from "../api";
 import type { CommitGuard, FileChange, FileViewMode, OpenFile, WipStatus } from "../types";
 import { plural } from "../util";
 import { showToast } from "../toast";
+import { CommitBox, draftMessage, emptyDraft, type CommitDraft } from "./CommitBox";
 import { FileList, ViewModeToggle, type MenuItem } from "./FileList";
 import { ChevronIcon } from "./icons";
-
-export interface CommitDraft {
-  summary: string;
-  description: string;
-  amend: boolean;
-  saved: { summary: string; description: string } | null;
-}
-
-export const emptyDraft: CommitDraft = { summary: "", description: "", amend: false, saved: null };
-const SUMMARY_LIMIT = 72;
 
 interface Props {
   path: string;
@@ -137,9 +128,7 @@ export function WipPanel(p: Props) {
     setBusy(true);
     setCommitError(null);
     setGuard(null);
-    const message = draft.description.trim()
-      ? `${draft.summary.trim()}\n\n${draft.description.trim()}\n`
-      : `${draft.summary.trim()}\n`;
+    const message = draftMessage(draft);
     try {
       if (moveTo) {
         await api.sfMoveToFeature(moveTo.envId, moveTo.repoId);
@@ -161,14 +150,6 @@ export function WipPanel(p: Props) {
     }
   };
 
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      void doCommit();
-    }
-  };
-
-  const remaining = SUMMARY_LIMIT - draft.summary.length;
   const openPath = (staged: boolean) =>
     p.openFile?.kind === "wip" && p.openFile.staged === staged ? p.openFile.file.path : null;
 
@@ -255,30 +236,14 @@ export function WipPanel(p: Props) {
           )}
         </section>
       </div>
-      <div className="commit-box" onKeyDown={onKey}>
-        <label className="amend">
-          <input type="checkbox" checked={draft.amend} disabled={busy} onChange={(e) => void toggleAmend(e.target.checked)} />
-          Amend previous commit
-        </label>
-        <div className="commit-inputs">
-          <div className="summary-row">
-            <input
-              className="summary-input"
-              placeholder="Commit summary"
-              value={draft.summary}
-              onChange={(e) => setDraft((d) => ({ ...d, summary: e.target.value }))}
-              spellCheck
-            />
-            <span className={`counter${remaining < 0 ? " over" : remaining < 10 ? " near" : ""}`}>{remaining}</span>
-          </div>
-          <textarea
-            className="desc-input"
-            placeholder="Description"
-            value={draft.description}
-            onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
-          />
-        </div>
-        {commitError && <pre className="commit-error">{commitError}</pre>}
+      <CommitBox
+        draft={draft}
+        setDraft={setDraft}
+        busy={busy}
+        onAmend={(amend) => void toggleAmend(amend)}
+        error={commitError}
+        onSubmit={() => void doCommit()}
+      >
         {guard && (
           <div className="commit-guard">
             <div>
@@ -298,7 +263,7 @@ export function WipPanel(p: Props) {
         <button className="commit-btn" disabled={!canCommit} onClick={() => void doCommit()} title="⌘/Ctrl + Enter">
           {label}
         </button>
-      </div>
+      </CommitBox>
       {discarding && (
         <div className="modal-backdrop" onMouseDown={() => setDiscarding(null)}>
           <div className="modal discard-modal" onMouseDown={(e) => e.stopPropagation()}>

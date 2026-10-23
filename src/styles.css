@@ -280,7 +280,7 @@ button.plain {
   color: var(--blue);
 }
 .st-conflict {
-  color: var(--red);
+  color: var(--amber);
 }
 
 .panel-loading,
@@ -1623,6 +1623,290 @@ button.plain {
   color: var(--dim);
   font-style: italic;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* ---------- merge conflicts ---------- */
+
+.st-amber {
+  color: var(--amber);
+}
+.outline-btn.amber {
+  border: 1px solid var(--amber);
+  color: #f3d29b;
+  background: rgba(227, 163, 60, 0.12);
+}
+.mini-btn.amber {
+  background: #5a4420;
+  color: #f3d29b;
+}
+.branch-chip.theirs {
+  background: #1f4f9a;
+  color: #dce8ff;
+}
+
+/* WIP row of the graph while a merge, rebase, ... is in progress. */
+.cl-op-note {
+  align-self: stretch;
+  flex: 1;
+  min-width: 0;
+  margin: 0 -10px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #8a6a2c;
+  color: #fff7e6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conflict-title {
+  gap: 8px;
+  color: var(--text-bright);
+}
+.op-desc {
+  padding: 10px 14px 4px;
+  text-align: center;
+  line-height: 22px;
+  flex-shrink: 0;
+}
+.op-sub {
+  margin-top: 4px;
+}
+.op-note {
+  margin: 0 0 4px;
+}
+.op-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.op-buttons .commit-btn {
+  flex: 1;
+  margin-top: 0;
+}
+.abort-btn,
+.skip-btn {
+  flex: 1;
+  padding: 9px;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  color: white;
+}
+.abort-btn {
+  border: 1px solid var(--red);
+  background: #7a2f2f;
+}
+.abort-btn:hover:not(:disabled) {
+  background: #8f3838;
+}
+.skip-btn {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  background: var(--chrome-2);
+}
+.abort-btn:disabled,
+.skip-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The A / B / Output editor. */
+.merge-sides {
+  flex: 1 1 55%;
+  min-height: 120px;
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+.merge-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.merge-pane + .merge-pane {
+  border-left: 1px solid var(--border);
+}
+.merge-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.merge-pane-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-bright);
+}
+.side-badge {
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1.5px solid;
+}
+.side-badge.a {
+  color: #4fc3dc;
+}
+.side-badge.b {
+  color: var(--amber);
+}
+.merge-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  user-select: text;
+}
+.merge-out-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.merge-out-title {
+  font-size: 15px;
+  color: var(--text-bright);
+}
+.merge-nav {
+  margin: 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.merge-nav-label {
+  color: var(--blue);
+  margin-right: 4px;
+}
+.icon-btn.boxed {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text-bright);
+}
+.icon-btn.boxed:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.rot-up {
+  display: inline-flex;
+  transform: rotate(-90deg);
+}
+.merge-out-actions {
+  display: flex;
+  gap: 6px;
+}
+.merge-out {
+  flex: 1 1 45%;
+  display: flex;
+  flex-direction: column;
+}
+.merge-out > .code {
+  flex: 1;
+}
+.merge-edit {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: var(--bg-deep);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 19px;
+  padding: 0 12px 20px;
+  white-space: pre;
+  overflow: auto;
+}
+
+.mline {
+  display: flex;
+  white-space: pre;
+}
+.mline > input,
+.mline > .cb {
+  width: 22px;
+  flex-shrink: 0;
+  margin: 0;
+  text-align: center;
+}
+.mline > input {
+  height: 13px;
+  align-self: center;
+  cursor: pointer;
+}
+.mline .ln {
+  width: 40px;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--dimmer);
+  flex-shrink: 0;
+  user-select: none;
+}
+.mline .text {
+  padding-right: 20px;
+  padding-left: 6px;
+}
+.mline.conflict {
+  box-shadow: inset 25px 0 0 -22px var(--mark);
+}
+.mline.conflict.a {
+  --mark: #15a0bf;
+  background: rgba(21, 160, 191, 0.13);
+}
+.mline.conflict.b {
+  --mark: #e3a33c;
+  background: rgba(227, 163, 60, 0.14);
+}
+.mline.conflict.unresolved {
+  --mark: #c517b6;
+  background: rgba(197, 23, 182, 0.18);
+}
+.merge-sides .mline.conflict {
+  cursor: pointer;
+}
+.mline.conflict.a.on {
+  background: rgba(21, 160, 191, 0.3);
+}
+.mline.conflict.b.on {
+  background: rgba(227, 163, 60, 0.3);
+}
+.mline.current .ln {
+  color: var(--text-bright);
+}
+.mline.placeholder .text {
+  color: var(--dim);
+  font-style: italic;
+}
+.side-mark {
+  color: var(--dim);
+  font-size: 11px;
+  user-select: none;
+}
+.pick-check {
+  color: var(--green);
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
+.conflict-choice {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.conflict-choice p {
+  margin: 0 0 12px;
+  color: var(--text-bright);
+}
+.conflict-choice-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* ---------- terminal ---------- */

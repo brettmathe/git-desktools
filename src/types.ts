@@ -141,11 +141,60 @@ export interface FileContent {
 export interface WipStatus {
   unstaged: FileChange[];
   staged: FileChange[];
+  /** A merge, rebase, etc. in progress; its conflicted files are only listed here. */
+  op: RepoOp | null;
+}
+
+export type OpKind = "merge" | "cherry-pick" | "revert" | "rebase" | "am" | "stash";
+
+export type ConflictKind =
+  | "both-modified"
+  | "both-added"
+  | "both-deleted"
+  | "deleted-by-us"
+  | "deleted-by-them"
+  | "added-by-us"
+  | "added-by-them";
+
+export interface ConflictEntry {
+  path: string;
+  kind: ConflictKind;
+}
+
+export interface OpSide {
+  label: string;
+  oid: string | null;
+}
+
+export interface RepoOp {
+  kind: OpKind;
+  /** The branch being merged into, picked onto or rebased. */
+  branch: string | null;
+  /** A: HEAD's side (for a rebase, the new base). */
+  ours: OpSide;
+  /** B: the commit being merged, picked, reverted or replayed. */
+  theirs: OpSide;
+  message: string;
+  messageEditable: boolean;
+  step: number | null;
+  total: number | null;
+  canSkip: boolean;
+  conflicts: ConflictEntry[];
+}
+
+export interface ConflictVersions {
+  base: FileContent | null;
+  ours: FileContent | null;
+  theirs: FileContent | null;
 }
 
 export type OpenFile =
   | { kind: "commit"; commit: string; file: FileChange }
-  | { kind: "wip"; staged: boolean; file: FileChange };
+  | { kind: "wip"; staged: boolean; file: FileChange }
+  | { kind: "conflict"; file: ConflictEntry };
+
+/** An open file shown as a diff (conflicts get their own editor). */
+export type DiffTarget = Exclude<OpenFile, { kind: "conflict" }>;
 
 export interface RecentRepo {
   path: string;

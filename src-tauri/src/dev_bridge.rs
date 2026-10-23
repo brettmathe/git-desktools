@@ -17,6 +17,7 @@
 //! push all...) are refused unless every repo of the environment is under
 //! `GDT_BRIDGE_WRITE_ROOT`.
 
+use crate::conflict;
 use crate::git::{self, NetLocks};
 use crate::smart::{self, SmartStore};
 use crate::smart_features as sf;
@@ -46,6 +47,13 @@ const MUTATING: &[&str] = &[
     "pull_repo",
     "push_repo",
     "checkout_branch",
+    "resolve_file",
+    "resolve_take",
+    "mark_resolved",
+    "mark_conflicted",
+    "abort_operation",
+    "continue_operation",
+    "skip_operation",
 ];
 
 const SF_MUTATING: &[&str] =
@@ -120,6 +128,16 @@ fn dispatch(b: &Bridge, cmd: &str, a: &Value) -> Result<Value, String> {
         "checkout_branch" => {
             to(block_on(git::checkout_impl(b.smart.clone(), s(a, "path"), s(a, "branch"), opt(a, "track"))))
         }
+        "conflict_versions" => to(block_on(conflict::conflict_versions(s(a, "path"), s(a, "file")))),
+        "resolve_file" => to(block_on(conflict::resolve_file(s(a, "path"), s(a, "file"), s(a, "content")))),
+        "resolve_take" => to(block_on(conflict::resolve_take(s(a, "path"), s(a, "file"), s(a, "side")))),
+        "conflict_markers" => to(block_on(conflict::conflict_markers(s(a, "path"), list(a, "files")))),
+        "resolved_status" => to(block_on(conflict::resolved_status(s(a, "path"), list(a, "files")))),
+        "mark_resolved" => to(block_on(conflict::mark_resolved(s(a, "path"), list(a, "files")))),
+        "mark_conflicted" => to(block_on(conflict::mark_conflicted(s(a, "path"), s(a, "file")))),
+        "abort_operation" => to(block_on(conflict::abort_operation(s(a, "path")))),
+        "continue_operation" => to(block_on(conflict::continue_impl(b.smart.clone(), s(a, "path"), s(a, "message")))),
+        "skip_operation" => to(block_on(conflict::skip_operation(s(a, "path")))),
         "push_repo" => to(block_on(git::push_impl(&b.locks, s(a, "path"), opt(a, "remote"), opt(a, "branch"), None))),
         "load_settings" => Ok(b.settings.lock().unwrap().clone()),
         "save_settings" => {

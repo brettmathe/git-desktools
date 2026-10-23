@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, errorText } from "../api";
 import { WIP_ID, type CheckoutWarning, type FileChange, type FileViewMode, type OpenFile, type RepoData, type WipStatus } from "../types";
+import { opNote } from "../repoOp";
 import { fileStats, notifyReposChanged, plural, relativeTime, REPOS_CHANGED } from "../util";
 import { showToast } from "../toast";
 import { CommitList, type ListHandle } from "./CommitList";
 import { CommitPanel } from "./CommitPanel";
+import { ConflictPanel } from "./ConflictPanel";
+import { ConflictView } from "./ConflictView";
 import { DiffView } from "./DiffView";
 import { ChevronIcon, FetchIcon, PullIcon, PushIcon, RefreshIcon, TerminalIcon, XIcon } from "./icons";
 import { clamp, Resizer } from "./Resizer";
 import { Sidebar } from "./Sidebar";
 import { TerminalPanel, type TermKind, type TermSession } from "./TerminalPanel";
-import { emptyDraft, WipPanel, type CommitDraft } from "./WipPanel";
+import { emptyDraft, type CommitDraft } from "./CommitBox";
+import { WipPanel } from "./WipPanel";
 
 interface Props {
   path: string;
@@ -22,7 +26,7 @@ interface Props {
 
 const POLL_MS = 3000;
 const BACKOFF_SECONDS = [60, 120, 300, 600];
-const EMPTY_WIP: WipStatus = { unstaged: [], staged: [] };
+const EMPTY_WIP: WipStatus = { unstaged: [], staged: [], op: null };
 
 /** Unique changed paths across staged and unstaged, preferring the staged status. */
 function wipFiles(w: WipStatus): FileChange[] {
@@ -91,7 +95,7 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
         setWip(w);
       }
       setWipVersion((v) => v + 1);
-      const dirty = w.staged.length + w.unstaged.length > 0;
+      const dirty = w.staged.length + w.unstaged.length > 0 || w.op !== null;
       if (dataRef.current && dirty !== dataRef.current.hasWip) await load();
     } catch {
       /* repo may be mid-operation (e.g. index.lock); try again next poll */
@@ -131,6 +135,20 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
       window.clearInterval(id);
     };
   }, [active, check]);
+
+  // A merge, rebase, etc. just stopped on conflicts: show them.
+  const hasOp = wip.op !== null;
+  useEffect(() => {
+    if (hasOp && dataRef.current?.hasWip) setSelected(WIP_ID);
+  }, [hasOp, data?.hasWip]);
+
+  // A conflict that was resolved shows its staged diff; one that went away closes.
+  useEffect(() => {
+    if (openFile?.kind !== "conflict") return;
+    if (wip.op?.conflicts.some((c) => c.path === openFile.file.path)) return;
+    const staged = wip.staged.find((f) => f.path === openFile.file.path);
+    setOpenFile(staged ? { kind: "wip", staged: true, file: staged } : null);
+  }, [wip, openFile]);
 
   // A WIP file whose diff is open may move between the unstaged and staged lists.
   useEffect(() => {
@@ -291,7 +309,7 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
     setOpenFile((f) => {
       if (!f) return f;
       if (f.kind === "commit" && f.commit === id) return f;
-      if (f.kind === "wip" && id === WIP_ID) return f;
+      if (f.kind !== "commit" && id === WIP_ID) return f;
       return null;
     });
   }, []);
@@ -459,13 +477,24 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
             <CommitList
               data={data}
               wipStats={wipStats}
+              opNote={wip.op ? opNote(wip.op) : null}
               selected={selected}
               onSelect={select}
               onCheckout={checkout}
               handleRef={listRef}
             />
           </div>
-          {openFile && (
+          {openFile?.kind === "conflict" && wip.op && (
+            <ConflictView
+              path={path}
+              entry={openFile.file}
+              op={wip.op}
+              active={active}
+              onClose={closeFile}
+              onResolved={refreshWip}
+            />
+          )}
+          {openFile && openFile.kind !== "conflict" && (
             <DiffView
               path={path}
               target={openFile}
@@ -478,7 +507,29 @@ export function RepoView({ path, active, autoFetchSeconds, fetchDelayMs }: Props
         </div>
         <Resizer onDrag={(d) => setDetailW((w) => clamp(w - d, 300, 900))} />
         <div className="detail-col" style={{ width: detailW }}>
-          {selected === WIP_ID ? (
+          {selected === WIP_ID && wip.op ? (
+            <ConflictPanel
+              path={path}
+              wip={wip}
+              op={wip.op}
+              viewMode={viewMode}
+              onViewMode={setViewMode}
+              openFile={openFile}
+              onOpenConflict={(entry) => setOpenFile({ kind: "conflict", file: entry })}
+              onOpenFile={(file, staged) => setOpenFile({ kind: "wip", staged, file })}
+              onChanged={refreshWip}
+              onFinished={async (sha) => {
+                setOpenFile(null);
+                const d = await load();
+                await refreshWip();
+                notifyReposChanged();
+                if (sha && !d?.hasWip && d?.commits.some((c) => c.id === sha)) {
+                  setSelected(sha);
+                  listRef.current?.scrollToId(sha);
+                }
+              }}
+            />
+          ) : selected === WIP_ID ? (
             <WipPanel
               path={path}
               wip={wip}
