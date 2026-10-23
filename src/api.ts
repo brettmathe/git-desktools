@@ -12,6 +12,7 @@ import type {
   RepoCheck,
   RepoData,
   RepoInfo,
+  MergeOutcome,
   PushOutcome,
   RepoSummary,
   ScanHit,
@@ -94,6 +95,7 @@ export const api = {
   sfRenameFeature: (envId: string, featureId: string, name: string) =>
     invoke<SmartEnv>("sf_rename_feature", { envId, featureId, name }),
   sfPushAll: (envId: string, featureId: string) => invoke<PushOutcome[]>("sf_push_all", { envId, featureId }),
+  sfMergeBase: (envId: string) => invoke<MergeOutcome[]>("sf_merge_base", { envId }),
 };
 
 /** Backend Smart Features events (see smart_watch.rs). */

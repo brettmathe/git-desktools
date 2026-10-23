@@ -27,7 +27,7 @@ const MAX_FILES: usize = 5_000;
 const MAX_DIFF_LINES: usize = 20_000;
 const MAX_CONTENT_BYTES: usize = 2 * 1024 * 1024;
 const BACKGROUND_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
-const MANUAL_FETCH_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const MANUAL_FETCH_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub(crate) fn e<E: std::fmt::Display>(err: E) -> String {
     err.to_string()

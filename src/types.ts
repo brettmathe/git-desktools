@@ -318,6 +318,13 @@ export interface PushOutcome {
   detail: string;
 }
 
+export interface MergeOutcome {
+  repoId: string;
+  label: string;
+  status: "merged" | "skipped" | "failed";
+  detail: string;
+}
+
 export interface RepoCheck {
   root: string;
   name: string;

@@ -1,5 +1,5 @@
 //! Smart Features: starting a feature, moving changed repos onto its branch
-//! (auto-branch), the commit guard, Back to base and Push all.
+//! (auto-branch), the commit guard, Back to base, Push all and Merge base.
 //!
 //! The rule: a repo's feature branch is created only when a file in that repo
 //! changes. Starting a feature creates no branches; the watcher (smart_watch.rs)
@@ -7,7 +7,9 @@
 //! Creating a branch at the current commit never touches the working tree, so
 //! it's safe while an editor is still writing files.
 
-use crate::git::{blocking, head_branch, is_dirty, now_secs, run_git, CmdResult, GitRun, NetLocks, BUSY};
+use crate::git::{
+    blocking, head_branch, is_dirty, now_secs, run_git, CmdResult, GitRun, NetLocks, BUSY, MANUAL_FETCH_TIMEOUT,
+};
 use crate::smart_switch::switch_locked;
 use crate::smart::{base_tip, new_id, resolve_base, Feature, FeatureRepo, SmartEnv, SmartRepo, SmartStore};
 use git2::{BranchType, Repository, RepositoryState};
@@ -466,6 +468,124 @@ pub fn push_all(store: &SmartStore, locks: &NetLocks, env_id: &str, feature_id: 
 }
 
 // ---------------------------------------------------------------------------
+// Merge base
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeOutcome {
+    repo_id: String,
+    label: String,
+    /// "merged" | "skipped" | "failed"
+    status: &'static str,
+    detail: String,
+}
+
+fn merge_one(locks: &NetLocks, env: &SmartEnv, r: &SmartRepo, branch: &str) -> MergeOutcome {
+    let out = |status, detail: String| MergeOutcome { repo_id: r.id.clone(), label: r.label.clone(), status, detail };
+    let repo = match open_repo(r) {
+        Ok(repo) => repo,
+        Err(err) => return out("failed", err),
+    };
+    if head_branch(&repo).as_deref() != Some(branch) {
+        return out("skipped", format!("not on {branch}"));
+    }
+    if repo.state() != RepositoryState::Clean {
+        return out("skipped", "a merge, rebase or similar is in progress".into());
+    }
+    // Aborting a conflicted merge could take uncommitted work with it.
+    if is_dirty(&repo) {
+        return out("skipped", "uncommitted changes; commit or stash them first".into());
+    }
+    let Some(base) = base_of(env, r, &repo) else { return out("skipped", "no base branch".into()) };
+    let Some(_guard) = locks.try_lock(&r.path) else { return out("failed", BUSY.into()) };
+    let cwd = Path::new(&r.path);
+    let has_origin = repo.find_remote("origin").is_ok();
+    if has_origin {
+        let fetched = run_git(
+            cwd,
+            GitRun {
+                args: vec!["fetch".into(), "--quiet".into(), "origin".into(), base.clone()],
+                timeout: Some(MANUAL_FETCH_TIMEOUT),
+                ..Default::default()
+            },
+        );
+        if let Err(err) = fetched {
+            return out("failed", err);
+        }
+    }
+    // origin/<base>, so a stale local base doesn't matter; the local base without a remote.
+    let remote = format!("origin/{base}");
+    let from = if has_origin && repo.find_reference(&format!("refs/remotes/{remote}")).is_ok() { remote } else { base };
+    let Some(theirs) = repo.revparse_single(&from).ok().map(|o| o.id()) else {
+        return out("skipped", format!("{from} not found"));
+    };
+    let Some(ours) = repo.head().ok().and_then(|h| h.target()) else {
+        return out("skipped", "the branch has no commits".into());
+    };
+    let behind = repo.graph_ahead_behind(ours, theirs).map(|(_, b)| b).unwrap_or(0);
+    if behind == 0 {
+        return out("skipped", format!("already has {from}"));
+    }
+    match git(cwd, &["merge", "--no-edit", &from]) {
+        Ok(()) => out("merged", format!("{} from {from}", if behind == 1 { "1 commit".into() } else { format!("{behind} commits") })),
+        Err(err) => {
+            // Reopen: the handle's index predates the merge.
+            let Ok(repo) = open_repo(r) else { return out("failed", err) };
+            if repo.state() != RepositoryState::Merge {
+                return out("failed", err);
+            }
+            let conflicted = conflicted_paths(&repo);
+            // Leave the repo as it was: a half-merged repo blocks switching features.
+            let _ = git(cwd, &["merge", "--abort"]);
+            out(
+                "failed",
+                format!(
+                    "conflicts in {}; nothing was merged. Run `git merge {from}` in the terminal to resolve them.",
+                    conflicted.join(", ")
+                ),
+            )
+        }
+    }
+}
+
+fn conflicted_paths(repo: &Repository) -> Vec<String> {
+    let Ok(index) = repo.index() else { return Vec::new() };
+    let Ok(conflicts) = index.conflicts() else { return Vec::new() };
+    conflicts
+        .filter_map(|c| c.ok())
+        .filter_map(|c| c.our.or(c.their).or(c.ancestor))
+        .map(|e| String::from_utf8_lossy(&e.path).to_string())
+        .collect()
+}
+
+/// Merge each repo's base (origin/<base> after fetching it) into the active
+/// feature's branch, wherever the feature has the branch checked out. Repos
+/// with uncommitted changes are skipped; a merge that conflicts is aborted.
+pub fn merge_base(store: &SmartStore, locks: &NetLocks, env_id: &str) -> CmdResult<Vec<MergeOutcome>> {
+    // Holds off auto-branch and feature switches while branches move.
+    let _op = store.op_lock();
+    let env = store.get(env_id)?;
+    if env.journal.is_some() {
+        return Err(format!("A feature switch in {} is running or didn't finish. Retry or roll it back first.", env.name));
+    }
+    let feature = env.active_feature().ok_or("No feature is active.")?;
+    let repos: Vec<&SmartRepo> = env.repos.iter().filter(|r| feature.repos.contains_key(&r.id)).collect();
+    let mut out = Vec::with_capacity(repos.len());
+    for chunk in repos.chunks(PUSH_THREADS) {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> =
+                chunk.iter().map(|r| scope.spawn(|| merge_one(locks, &env, r, &feature.branch))).collect();
+            for h in handles {
+                if let Ok(o) = h.join() {
+                    out.push(o);
+                }
+            }
+        });
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 
 #[tauri::command]
@@ -525,6 +645,12 @@ pub async fn sf_push_all(
 ) -> CmdResult<Vec<PushOutcome>> {
     let store = store.inner().clone();
     blocking(move || push_all(&store, &app.state::<NetLocks>(), &env_id, &feature_id)).await
+}
+
+#[tauri::command]
+pub async fn sf_merge_base(app: AppHandle, store: State<'_, SmartStore>, env_id: String) -> CmdResult<Vec<MergeOutcome>> {
+    let store = store.inner().clone();
+    blocking(move || merge_base(&store, &app.state::<NetLocks>(), &env_id)).await
 }
 
 #[cfg(test)]
@@ -706,5 +832,49 @@ pub(crate) mod tests {
         checkout_remote(&store, &env_id, &repo_id(&store, &env_id, 0)).unwrap();
         assert_eq!(head(&p[0]).as_deref(), Some("feat/team"));
         assert!(p[0].join("t.txt").exists());
+    }
+
+    #[test]
+    fn merge_base_merges_skips_and_aborts() {
+        let (s, store, env_id, p) = setup("merge", &["a", "b", "c", "d"]);
+        let locks = NetLocks::default();
+        start_feature(&store, &NetLocks::default(), &env_id, "", "feat/m", false).unwrap();
+        for (i, repo) in p.iter().enumerate() {
+            std::fs::write(repo.join("f.txt"), format!("feature {i}\n")).unwrap();
+            auto_branch(&store, &env_id, &repo_id(&store, &env_id, i), false).unwrap().unwrap();
+            sh(repo, &["add", "."]);
+            sh(repo, &["commit", "-qm", "feature"]);
+        }
+        // A teammate moves main in a, b and c; b's change conflicts with the feature's.
+        for (i, name) in ["a", "b", "c"].iter().enumerate() {
+            let other = s.path(&format!("other-{name}"));
+            let origin = s.path(&format!("remotes/{name}.git"));
+            sh(&s.0, &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+            let file = if i == 1 { "f.txt" } else { "m.txt" };
+            std::fs::write(other.join(file), "from main\n").unwrap();
+            sh(&other, &["add", "."]);
+            sh(&other, &["commit", "-qm", "main moved"]);
+            sh(&other, &["push", "-q", "origin", "main"]);
+        }
+        std::fs::write(p[2].join("f.txt"), "uncommitted\n").unwrap();
+        let b_before = Repository::open(&p[1]).unwrap().head().unwrap().target();
+
+        let out = merge_base(&store, &locks, &env_id).unwrap();
+        let by = |l: &str| out.iter().find(|o| o.label == l).unwrap();
+        assert_eq!(by("a").status, "merged", "{out:?}");
+        assert!(p[0].join("m.txt").exists(), "fetched origin/main before merging");
+        assert_eq!(head(&p[0]).as_deref(), Some("feat/m"));
+        assert_eq!(by("b").status, "failed");
+        assert!(by("b").detail.contains("f.txt"), "{}", by("b").detail);
+        let b = Repository::open(&p[1]).unwrap();
+        assert_eq!(b.state(), RepositoryState::Clean, "the conflicted merge was aborted");
+        assert_eq!(b.head().unwrap().target(), b_before);
+        assert_eq!(by("c").status, "skipped");
+        assert!(by("c").detail.contains("uncommitted"));
+        assert_eq!(std::fs::read_to_string(p[2].join("f.txt")).unwrap(), "uncommitted\n");
+        assert_eq!(by("d").status, "skipped", "main didn't move in d");
+        // a is up to date now.
+        let again = merge_base(&store, &locks, &env_id).unwrap();
+        assert_eq!(again.iter().find(|o| o.label == "a").unwrap().status, "skipped");
     }
 }
